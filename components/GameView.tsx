@@ -3,7 +3,8 @@ import React, { useEffect, useCallback, useState, useMemo, useRef } from 'react'
 import { Stage, Layer, Line } from 'react-konva';
 import Konva from 'konva';
 import { useGameStore } from '../store.ts';
-import { getHexKey, getNeighbors, checkGrowthCondition, getSecondsToGrow, hexToPixel, calculateReward, findPath } from '../services/hexUtils.ts';
+import { getHexKey, getNeighbors, getSecondsToGrow, hexToPixel, calculateReward, findPath } from '../services/hexUtils.ts';
+import { checkGrowthCondition } from '../rules/growth.ts';
 import Hexagon from './Hexagon.tsx'; 
 import Unit from './Unit.tsx';
 import Background from './Background.tsx';
@@ -12,7 +13,7 @@ import {
   Crown, Target, TrendingUp, ChevronDown, ChevronUp, Shield, Clock, MapPin, Zap,
   RotateCcw, RotateCw, ArrowUp, CheckCircle2, ChevronsUp, Lock, Bot, Activity
 } from 'lucide-react';
-import { UPGRADE_LOCK_QUEUE_SIZE, EXCHANGE_RATE_COINS_PER_MOVE, HEX_SIZE } from '../constants.ts';
+import { UPGRADE_LOCK_QUEUE_SIZE, EXCHANGE_RATE_COINS_PER_MOVE } from '../rules/config.ts';
 import { Hex, EntityType } from '../types.ts';
 
 const VIEWPORT_PADDING = 200; 
@@ -108,7 +109,6 @@ const GameView: React.FC = () => {
   const isMoving = player.movementQueue.length > 0;
   
   // STRICT RECOVERY: Only if damaged (current < max).
-  // Claiming new sectors (0 -> 1) is now handled via Upgrade.
   const canRecover = currentHex ? (currentHex.currentLevel < currentHex.maxLevel) : false;
 
   const growthCondition = useMemo(() => {
@@ -118,7 +118,12 @@ const GameView: React.FC = () => {
 
   const upgradeCondition = useMemo(() => {
     if (!currentHex) return { canGrow: false, reason: 'Invalid Hex' };
-    const simulatedHex = { ...currentHex, currentLevel: currentHex.maxLevel };
+    
+    // Simulate what happens if we were fully repaired
+    const simulatedHex = { ...currentHex, currentLevel: Math.max(0, currentHex.maxLevel) };
+    
+    // Pass 'botPositions' as occupied hexes. 
+    // IMPORTANT: Player's own position is NOT passed as an obstacle, because standing on a hex shouldn't block its own upgrade neighbors.
     return checkGrowthCondition(simulatedHex, player, neighbors, grid, botPositions);
   }, [currentHex, player, grid, neighbors, botPositions]);
 
@@ -324,9 +329,20 @@ const GameView: React.FC = () => {
   const handleMouseUp = (e: Konva.KonvaEventObject<MouseEvent>) => {
     if (isRotating.current) {
         isRotating.current = false;
+        // Ensure we always re-enable draggable, even if focus was lost momentarily
         const stage = e.target.getStage();
         if (stage) stage.draggable(true);
     }
+  };
+
+  // Safety handler if mouse leaves the window while rotating
+  // Prevents the map from getting stuck in "rotating" mode where left-click drags fail
+  const handleMouseLeave = (e: Konva.KonvaEventObject<MouseEvent>) => {
+      if (isRotating.current) {
+          isRotating.current = false;
+          const stage = e.target.getStage();
+          if (stage) stage.draggable(true);
+      }
   };
 
   const handleDragEnd = (e: Konva.KonvaEventObject<DragEvent>) => {
@@ -351,7 +367,9 @@ const GameView: React.FC = () => {
      const allUnits = [{ ...player, isPlayer: true }, ...bots.map(b => ({ ...b, isPlayer: false }))];
      for (const u of allUnits) {
          const { y } = hexToPixel(u.q, u.r, cameraRotation);
-         items.push({ type: 'UNIT', id: u.id, depth: y + 1, q: u.q, r: u.r, isPlayer: u.isPlayer });
+         // Z-INDEX FIX: Add +25 to depth to ensure units render ON TOP of the hex they stand on.
+         // Without this, the unit's base (y) often competes with the hex's center (y), causing clipping.
+         items.push({ type: 'UNIT', id: u.id, depth: y + 25, q: u.q, r: u.r, isPlayer: u.isPlayer });
      }
 
      if (!isMoving) {
@@ -405,7 +423,11 @@ const GameView: React.FC = () => {
       {/* CANVAS */}
       <div className="absolute inset-0 z-10">
         <Stage width={dimensions.width} height={dimensions.height} draggable
-          onWheel={handleWheel} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} 
+          onWheel={handleWheel} 
+          onMouseDown={handleMouseDown} 
+          onMouseMove={handleMouseMove} 
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseLeave}
           onDragStart={() => setHoveredHexId(null)}
           onDragEnd={handleDragEnd}
           onContextMenu={(e) => e.evt.preventDefault()} x={viewState.x} y={viewState.y} scaleX={viewState.scale} scaleY={viewState.scale}

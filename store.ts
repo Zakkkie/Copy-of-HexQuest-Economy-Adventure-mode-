@@ -1,12 +1,10 @@
-
 import { create } from 'zustand';
 import { GameState, Entity, Hex, EntityType, UIState, WinCondition, LeaderboardEntry, EntityState } from './types.ts';
-import { GAME_CONFIG } from './gameEngine/config.ts';
+import { GAME_CONFIG } from './rules/config.ts';
 import { getHexKey, getNeighbors, findPath } from './services/hexUtils.ts';
-import { GameEngine } from './gameEngine/GameEngine.ts';
-import { checkGrowthCondition } from './gameEngine/growth.ts';
+import { GameEngine } from './engine/GameEngine.ts';
+import { checkGrowthCondition } from './rules/growth.ts';
 
-// --- MOCK DATABASE ---
 const MOCK_USER_DB: Record<string, { password: string; avatarColor: string; avatarIcon: string }> = {};
 const BOT_PALETTE = ['#ef4444', '#f97316', '#a855f7', '#ec4899']; 
 let MOCK_LEADERBOARD: LeaderboardEntry[] = [
@@ -36,6 +34,7 @@ interface GameActions {
 
 type GameStore = GameState & GameActions;
 
+// --- INITIAL DATA GENERATION ---
 const createInitialHex = (q: number, r: number, startLevel = 0): Hex => ({
   id: getHexKey(q, r), q, r, currentLevel: 0, maxLevel: startLevel, progress: 0, revealed: true
 });
@@ -62,12 +61,13 @@ const generateInitialGameData = (winCondition: WinCondition | null) => {
       id: `bot-${i+1}`, type: EntityType.BOT, state: EntityState.IDLE, q: sp.q, r: sp.r,
       playerLevel: 0, coins: GAME_CONFIG.INITIAL_COINS, moves: GAME_CONFIG.INITIAL_MOVES,
       totalCoinsEarned: 0, recentUpgrades: [], movementQueue: [],
-      memory: { lastPlayerPos: null, chokePoints: [], aggressionFactor: 0.5 },
+      memory: { lastPlayerPos: null, currentGoal: null, stuckCounter: 0 },
       avatarColor: BOT_PALETTE[i % BOT_PALETTE.length]
     });
   }
   
   return {
+    stateVersion: 0, // Init Version
     sessionId: Math.random().toString(36).substring(2, 15),
     sessionStartTime: Date.now(),
     winCondition,
@@ -79,8 +79,8 @@ const generateInitialGameData = (winCondition: WinCondition | null) => {
     } as Entity,
     bots,
     currentTurn: 0,
-    messageLog: ['Operational.'],
-    botActivityLog: [], // NEW
+    messageLog: ['System Online.'],
+    botActivityLog: [], 
     gameStatus: 'PLAYING' as const,
     pendingConfirmation: null,
     isPlayerGrowing: false,
@@ -94,6 +94,9 @@ const generateInitialGameData = (winCondition: WinCondition | null) => {
   };
 };
 
+// --- ENGINE INSTANCE ---
+let engine: GameEngine | null = null;
+
 export const useGameStore = create<GameStore>((set, get) => ({
   uiState: 'MENU',
   user: null,
@@ -101,29 +104,54 @@ export const useGameStore = create<GameStore>((set, get) => ({
   
   setUIState: (uiState) => set({ uiState }),
   
-  // Auth Placeholders
+  // Auth
   loginAsGuest: (nickname, avatarColor, avatarIcon) => set({ user: { isAuthenticated: true, isGuest: true, nickname, avatarColor, avatarIcon } }),
   registerUser: (nickname, password, avatarColor, avatarIcon) => { MOCK_USER_DB[nickname] = { password, avatarColor, avatarIcon }; set({ user: { isAuthenticated: true, isGuest: false, nickname, avatarColor, avatarIcon } }); return { success: true }; },
   loginUser: (nickname, password) => { const r = MOCK_USER_DB[nickname]; if (!r || r.password !== password) return { success: false }; set({ user: { isAuthenticated: true, isGuest: false, nickname, avatarColor: r.avatarColor, avatarIcon: r.avatarIcon } }); return { success: true }; },
   logout: () => set({ ...generateInitialGameData(null), user: null, uiState: 'MENU', hasActiveSession: false }),
 
-  startNewGame: (winCondition) => set((state) => ({ ...generateInitialGameData(winCondition), user: state.user, hasActiveSession: true, uiState: 'GAME' })),
-  abandonSession: () => set((state) => ({ ...generateInitialGameData(null), user: state.user, uiState: 'MENU', hasActiveSession: false, gameStatus: 'GAME_OVER' })),
+  // Game Lifecycle
+  startNewGame: (winCondition) => {
+      const initialData = generateInitialGameData(winCondition);
+      const currentUser = get().user;
+      const fullState: GameState = {
+        ...initialData,
+        user: currentUser,
+        uiState: 'GAME'
+      };
+      engine = new GameEngine(fullState); 
+      set({ ...initialData, user: currentUser, hasActiveSession: true, uiState: 'GAME' });
+  },
+
+  abandonSession: () => {
+      engine = null;
+      set((state) => ({ ...generateInitialGameData(null), user: state.user, uiState: 'MENU', hasActiveSession: false, gameStatus: 'GAME_OVER' }));
+  },
   
   showToast: (message, type) => set({ toast: { message, type, timestamp: Date.now() } }),
   hideToast: () => set({ toast: null }),
 
-  togglePlayerGrowth: (intent = 'RECOVER') => set(state => {
+  // Player Actions
+  togglePlayerGrowth: (intent: 'RECOVER' | 'UPGRADE' = 'RECOVER') => set(state => {
       if (state.uiState !== 'GAME' || state.player.movementQueue.length > 0) return state;
-      if (state.isPlayerGrowing) return { isPlayerGrowing: false, playerGrowthIntent: null };
+      
+      // Toggle Off
+      if (state.isPlayerGrowing) {
+          // Sync with Engine
+          if (engine) engine.setPlayerIntent(false, null);
+          return { isPlayerGrowing: false, playerGrowthIntent: null };
+      }
 
-      // Validation for feedback
+      // Validation
       const hex = state.grid[getHexKey(state.player.q, state.player.r)];
       const neighbors = getNeighbors(state.player.q, state.player.r);
       const others = state.bots.map(b => ({ q: b.q, r: b.r }));
       const check = checkGrowthCondition(hex, state.player, neighbors, state.grid, others);
 
       if (!check.canGrow && intent === 'UPGRADE') return { toast: { message: check.reason || "Denied", type: 'error', timestamp: Date.now() } };
+      
+      // Toggle On - Sync with Engine
+      if (engine) engine.setPlayerIntent(true, intent);
       return { isPlayerGrowing: true, playerGrowthIntent: intent };
   }),
 
@@ -152,47 +180,61 @@ export const useGameStore = create<GameStore>((set, get) => ({
       if (state.player.coins < costCoins) return { toast: { message: `Need ${totalMoveCost} moves`, type: 'error', timestamp: Date.now() } };
       if (costCoins > 0) return { pendingConfirmation: { type: 'MOVE_WITH_COINS', data: { path, costMoves, costCoins } } };
 
-      // Apply
-      const newState = GameEngine.applyAction(state, state.player.id, { type: 'MOVE', path });
+      if (!engine) return state;
+      
+      // Pass stateVersion for safety (optional for synchronous UI actions but good practice)
+      const res = engine.applyAction(state.player.id, { type: 'MOVE', path, stateVersion: state.stateVersion });
+      
+      if (!res.ok) return { toast: { message: res.reason || "Error", type: 'error', timestamp: Date.now() } };
+
+      const syncedState = engine.state;
       return { 
-          player: { ...newState.player, moves: newState.player.moves - costMoves }, 
+          player: { ...syncedState.player }, 
+          moves: syncedState.player.moves, // Explicit sync
           isPlayerGrowing: false, 
-          playerGrowthIntent: null 
+          playerGrowthIntent: null,
+          grid: syncedState.grid,
+          stateVersion: syncedState.stateVersion
       };
   }),
 
   confirmPendingAction: () => set(state => {
-      if (!state.pendingConfirmation) return state;
-      const { path, costMoves, costCoins } = state.pendingConfirmation.data;
+      if (!state.pendingConfirmation || !engine) return state;
+      const { path } = state.pendingConfirmation.data;
       
-      const newState = GameEngine.applyAction(state, state.player.id, { type: 'MOVE', path });
+      const res = engine.applyAction(state.player.id, { type: 'MOVE', path, stateVersion: state.stateVersion });
+      if (!res.ok) return { toast: { message: res.reason || "Error", type: 'error', timestamp: Date.now() }, pendingConfirmation: null };
+
+      const syncedState = engine.state;
       return { 
-          player: { ...newState.player, moves: newState.player.moves - costMoves, coins: newState.player.coins - costCoins }, 
+          player: syncedState.player, 
           pendingConfirmation: null, 
           isPlayerGrowing: false, 
-          playerGrowthIntent: null 
+          playerGrowthIntent: null,
+          grid: syncedState.grid,
+          stateVersion: syncedState.stateVersion
       };
   }),
 
   cancelPendingAction: () => set({ pendingConfirmation: null }),
 
   processMovementStep: () => set(state => {
-      // VISUAL ONLY: Real data is handled in tick via MovementSystem now
+      // Visual interpolation only, Logic handled in Tick
       return state;
   }),
 
+  // MAIN LOOP
   tick: () => set(state => {
-      if (state.uiState !== 'GAME' || state.gameStatus !== 'PLAYING') return state;
+      if (state.uiState !== 'GAME' || state.gameStatus !== 'PLAYING' || !engine) return state;
       
-      const result = GameEngine.processTick(state);
+      const result = engine.processTick();
       
-      // Process Events for UI Side Effects
       let newLog = state.messageLog;
       let newToast = state.toast;
       
       if (result.events.length > 0) {
           const logMessages = result.events
-             .filter(e => e.message && e.type !== 'BOT_LOG') // Filter bot logs from main chat
+             .filter(e => e.message && e.type !== 'BOT_LOG') 
              .map(e => e.message as string);
           
           if (logMessages.length > 0) {
@@ -205,6 +247,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
           }
       }
 
+      // Sync Store with Engine State
       return { ...result.state, messageLog: newLog, toast: newToast };
   })
 }));

@@ -1,21 +1,26 @@
 
 export type HexCoord = { q: number; r: number; upgrade?: boolean };
 
-export interface Hex {
+// Read-only view of a Hex for the Bot (Architecture Requirement)
+export interface HexView {
   id: string;
   q: number;
   r: number;
-  currentLevel: number; 
-  maxLevel: number;     
-  progress: number;     
-  revealed: boolean;
-  
+  currentLevel: number;
+  maxLevel: number;
   structureType?: 'NONE' | 'BARRIER' | 'MINE' | 'CAPITAL';
+  ownerId?: string; 
+}
+
+// Full State Hex
+export interface Hex extends HexView {
+  progress: number;
+  revealed: boolean;
   structureHp?: number;
   mineTimer?: number;
   trap?: { active: boolean, potency?: number } | null;
-  attackPoint?: number; 
-  movePoint?: number; 
+  attackPoint?: number;
+  movePoint?: number;
 }
 
 export enum EntityType {
@@ -27,29 +32,32 @@ export enum EntityState {
   IDLE = 'IDLE',
   MOVING = 'MOVING',
   GROWING = 'GROWING',
-  LOCKED = 'LOCKED' // Stunned or waiting
+  LOCKED = 'LOCKED'
 }
 
-export type BotGoalType = 'EXPAND' | 'DEFEND' | 'ATTACK' | 'GROWTH';
+export type BotGoalType = 'EXPAND' | 'DEFEND' | 'ATTACK' | 'GROWTH' | 'IDLE' | 'PREPARE_CYCLE';
 
 export interface BotGoal {
   type: BotGoalType;
   targetHexId?: string;
+  targetQ?: number;
+  targetR?: number;
   priority: number;
+  expiresAt: number; 
 }
 
 export interface BotMemory {
   lastPlayerPos: HexCoord | null;
-  chokePoints: string[]; 
-  aggressionFactor: number; 
-  currentGoal?: BotGoal; 
-  customState?: Record<string, any>; 
+  currentGoal: BotGoal | null;
+  stuckCounter: number;
+  lastActionFailed?: boolean;
+  failReason?: string;
 }
 
 export interface Entity {
   id: string;
   type: EntityType;
-  state: EntityState; // NEW: Explicit FSM State
+  state: EntityState;
   
   q: number;
   r: number;
@@ -67,7 +75,6 @@ export interface Entity {
   attackTokens?: number; 
 }
 
-// --- EVENT SYSTEM ---
 export type GameEventType = 
   | 'LEVEL_UP' 
   | 'SECTOR_ACQUIRED' 
@@ -77,13 +84,13 @@ export type GameEventType =
   | 'DEFEAT'
   | 'GROWTH_TICK'
   | 'ACTION_DENIED'
-  | 'BOT_LOG'; // NEW
+  | 'BOT_LOG';
 
 export interface GameEvent {
   type: GameEventType;
   entityId?: string;
   message?: string;
-  data?: any;
+  data?: Record<string, unknown>;
   timestamp: number;
 }
 
@@ -139,6 +146,7 @@ export interface LeaderboardEntry {
 }
 
 export interface GameState {
+  stateVersion: number; // Concurrency Control
   uiState: UIState;
   user: UserProfile | null;
   pendingConfirmation: PendingConfirmation | null;
@@ -152,10 +160,9 @@ export interface GameState {
   currentTurn: number;
   gameStatus: 'PLAYING' | 'GAME_OVER' | 'VICTORY' | 'DEFEAT';
   messageLog: string[];
-  botActivityLog: BotLogEntry[]; // NEW: Debug logs for bots
+  botActivityLog: BotLogEntry[];
   lastBotActionTime: number; 
   
-  // UI Intent State (distinct from Entity FSM)
   isPlayerGrowing: boolean; 
   playerGrowthIntent: 'RECOVER' | 'UPGRADE' | null; 
   
@@ -165,10 +172,16 @@ export interface GameState {
   leaderboard: LeaderboardEntry[];
   hasActiveSession: boolean;
   
-  telemetry?: any[]; 
+  telemetry?: GameEvent[]; 
 }
 
-// Actions
-export type MoveAction = { type: 'MOVE'; path: { q: number; r: number }[]; };
-export type UpgradeAction = { type: 'UPGRADE'; coord: { q: number; r: number }; upgradeType?: 'DEFAULT' | 'BARRIER' | 'MINE' | 'CAPITAL'; };
-export type BotAction = MoveAction | UpgradeAction;
+export type MoveAction = { type: 'MOVE'; path: { q: number; r: number }[]; stateVersion?: number };
+export type UpgradeAction = { type: 'UPGRADE'; coord: { q: number; r: number }; upgradeType?: 'DEFAULT' | 'BARRIER' | 'MINE' | 'CAPITAL'; stateVersion?: number };
+export type WaitAction = { type: 'WAIT'; stateVersion?: number };
+export type BotAction = MoveAction | UpgradeAction | WaitAction;
+
+// Validates result of logic before execution (Architecture Requirement)
+export interface ValidationResult {
+    ok: boolean;
+    reason?: string;
+}

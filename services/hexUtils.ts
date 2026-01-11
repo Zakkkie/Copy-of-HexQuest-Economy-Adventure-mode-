@@ -1,6 +1,6 @@
 
 import { Hex, HexCoord } from '../types';
-import { GAME_CONFIG, getLevelConfig } from '../gameEngine/config';
+import { GAME_CONFIG, getLevelConfig } from '../rules/config';
 
 export const getHexKey = (q: number, r: number): string => `${q},${r}`;
 export const getCoordinatesFromKey = (key: string): HexCoord => {
@@ -34,51 +34,87 @@ export const calculateReward = (level: number) => {
 
 export const getSecondsToGrow = (level: number) => getLevelConfig(level).growthTime;
 
-export { checkGrowthCondition } from '../gameEngine/growth';
+export { checkGrowthCondition } from '../rules/growth';
 
-// Pathfinding
+// A* Pathfinding (Optimized)
 export const findPath = (start: HexCoord, end: HexCoord, grid: Record<string, Hex>, rank: number, obstacles: HexCoord[]): HexCoord[] | null => {
   const startKey = getHexKey(start.q, start.r);
   const endKey = getHexKey(end.q, end.r);
   if (startKey === endKey) return null;
+  
+  // O(1) Lookup
   const obsKeys = new Set(obstacles.map(o => getHexKey(o.q, o.r)));
   if (obsKeys.has(endKey)) return null;
 
-  const dists: Record<string, number> = { [startKey]: 0 };
+  // G-Score: Cost from start
+  const gScore = new Map<string, number>();
+  gScore.set(startKey, 0);
+
+  // F-Score: Cost from start + Heuristic to end
+  const fScore = new Map<string, number>();
+  fScore.set(startKey, cubeDistance(start, end));
+
   const prev: Record<string, HexCoord | null> = { [startKey]: null };
-  const queue: { k: string, p: number }[] = [{ k: startKey, p: 0 }];
+  // Priority Queue simulated with array
+  const openSet: { k: string, f: number }[] = [{ k: startKey, f: fScore.get(startKey)! }];
+  const closedSet = new Set<string>();
 
   let iter = 0;
-  while (queue.length > 0) {
-    if (iter++ > 3000) return null;
-    queue.sort((a, b) => a.p - b.p);
-    const { k } = queue.shift()!;
-    if (k === endKey) {
+  while (openSet.length > 0) {
+    if (iter++ > 2500) return null; // Safety break
+    
+    // Sort by F-score (lowest first) - simulates Priority Queue extractMin
+    openSet.sort((a, b) => a.f - b.f);
+    const current = openSet.shift()!;
+    const currentKey = current.k;
+    
+    if (currentKey === endKey) {
+        // Reconstruct Path
         const path: HexCoord[] = [];
         let curr: HexCoord | null = end;
         while (curr && getHexKey(curr.q, curr.r) !== startKey) {
             path.unshift(curr);
-            curr = prev[getHexKey(curr.q, curr.r)];
+            const pKey = getHexKey(curr.q, curr.r);
+            curr = prev[pKey];
         }
         return path;
     }
-    const currC = getCoordinatesFromKey(k);
-    const currL = grid[k] ? grid[k].maxLevel : 0;
-    
+
+    closedSet.add(currentKey);
+    const currC = getCoordinatesFromKey(currentKey);
+    const currHex = grid[currentKey];
+    const currL = currHex ? currHex.maxLevel : 0;
+
     for (const n of getNeighbors(currC.q, currC.r)) {
         const nKey = getHexKey(n.q, n.r);
+        if (closedSet.has(nKey)) continue;
         if (obsKeys.has(nKey)) continue;
-        const hex = grid[nKey];
-        if (hex && hex.maxLevel > rank) continue;
-        const nextL = hex ? hex.maxLevel : 0;
-        if (Math.abs(currL - nextL) > 1) continue;
 
-        const cost = (hex && hex.maxLevel >= 2) ? hex.maxLevel : 1;
-        const newD = dists[k] + cost;
-        if (!(nKey in dists) || newD < dists[nKey]) {
-            dists[nKey] = newD;
+        const neighborHex = grid[nKey];
+        
+        // Rules Check
+        if (neighborHex && neighborHex.maxLevel > rank) continue; // Rank limit
+        const nextL = neighborHex ? neighborHex.maxLevel : 0;
+        if (Math.abs(currL - nextL) > 1) continue; // Height limit (Jump 1)
+
+        // Cost Calculation
+        // Base cost 1, rough terrain (L2+) costs more (Game Rule)
+        const moveCost = (neighborHex && neighborHex.maxLevel >= 2) ? neighborHex.maxLevel : 1;
+        const tentativeG = gScore.get(currentKey)! + moveCost;
+
+        if (tentativeG < (gScore.get(nKey) ?? Infinity)) {
             prev[nKey] = currC;
-            queue.push({ k: nKey, p: newD });
+            gScore.set(nKey, tentativeG);
+            const f = tentativeG + cubeDistance(n, end); // Heuristic
+            fScore.set(nKey, f);
+            
+            if (!openSet.some(x => x.k === nKey)) {
+                openSet.push({ k: nKey, f });
+            } else {
+                // Update priority
+                const item = openSet.find(x => x.k === nKey);
+                if (item) item.f = f;
+            }
         }
     }
   }

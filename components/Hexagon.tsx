@@ -3,7 +3,7 @@ import React, { useEffect, useRef, useMemo } from 'react';
 import { Group, Path, Shape } from 'react-konva';
 import Konva from 'konva';
 import { Hex } from '../types.ts';
-import { HEX_SIZE } from '../constants.ts';
+import { HEX_SIZE } from '../rules/config.ts';
 import { getSecondsToGrow, hexToPixel } from '../services/hexUtils.ts';
 import { useGameStore } from '../store.ts';
 
@@ -102,7 +102,12 @@ const HexagonVisual: React.FC<HexagonVisualProps> = React.memo(({ hex, rotation,
   }, [rotation, offsetY]);
 
 
-  const handleClick = () => {
+  const handleClick = (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => {
+    // Only allow Left Click (button 0). Button 2 is Right Click (Rotate).
+    // Touch events don't have 'button' property and are treated as primary interactions.
+    if ('button' in e.evt) {
+        if (e.evt.button !== 0) return; 
+    }
     onHexClick(hex.q, hex.r);
   };
 
@@ -117,7 +122,11 @@ const HexagonVisual: React.FC<HexagonVisualProps> = React.memo(({ hex, rotation,
           node.scaleY(scale);
        }, layer);
        anim.start();
-       return () => { anim.stop(); };
+       return () => { 
+           anim.stop(); 
+           // Ensure we snap back to scale 1 immediately when growth stops to prevent "hanging" scale
+           node.scale({x: 1, y: 1}); 
+       };
     } else {
         node.scale({x: 1, y: 1});
     }

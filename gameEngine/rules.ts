@@ -1,3 +1,2 @@
-
-// Deprecated. See config.ts and growth.ts
+// Deleted - Logic moved to rules/
 export {};
