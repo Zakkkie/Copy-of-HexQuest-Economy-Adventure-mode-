@@ -1,4 +1,7 @@
 
+
+
+
 export type HexCoord = { q: number; r: number; upgrade?: boolean };
 
 // Read-only view of a Hex for the Bot (Architecture Requirement)
@@ -84,7 +87,8 @@ export type GameEventType =
   | 'DEFEAT'
   | 'GROWTH_TICK'
   | 'ACTION_DENIED'
-  | 'BOT_LOG';
+  | 'BOT_LOG'
+  | 'LEADERBOARD_UPDATE';
 
 export interface GameEvent {
   type: GameEventType;
@@ -145,12 +149,9 @@ export interface LeaderboardEntry {
   timestamp: number;
 }
 
-export interface GameState {
-  stateVersion: number; // Concurrency Control
-  uiState: UIState;
-  user: UserProfile | null;
-  pendingConfirmation: PendingConfirmation | null;
-  
+// Authoritative state for a single game session, managed by GameEngine
+export interface SessionState {
+  stateVersion: number;
   sessionId: string; 
   sessionStartTime: number; 
   winCondition: WinCondition | null;
@@ -162,23 +163,32 @@ export interface GameState {
   messageLog: string[];
   botActivityLog: BotLogEntry[];
   lastBotActionTime: number; 
-  
   isPlayerGrowing: boolean; 
   playerGrowthIntent: 'RECOVER' | 'UPGRADE' | null; 
-  
   growingBotIds: string[]; 
+  telemetry?: GameEvent[]; 
+}
+
+// State for the entire application, managed by Zustand
+export interface GameState {
+  uiState: UIState;
+  user: UserProfile | null;
   toast: ToastMessage | null;
+  pendingConfirmation: PendingConfirmation | null;
   
+  // Cross-session state
   leaderboard: LeaderboardEntry[];
   hasActiveSession: boolean;
-  
-  telemetry?: GameEvent[]; 
 }
 
 export type MoveAction = { type: 'MOVE'; path: { q: number; r: number }[]; stateVersion?: number };
 export type UpgradeAction = { type: 'UPGRADE'; coord: { q: number; r: number }; upgradeType?: 'DEFAULT' | 'BARRIER' | 'MINE' | 'CAPITAL'; stateVersion?: number };
 export type WaitAction = { type: 'WAIT'; stateVersion?: number };
+export type RechargeAction = { type: 'RECHARGE_MOVE'; stateVersion?: number };
+
+// FIX: Added missing BotAction type, which is a subset of actions the AI can take.
 export type BotAction = MoveAction | UpgradeAction | WaitAction;
+export type GameAction = BotAction | RechargeAction;
 
 // Validates result of logic before execution (Architecture Requirement)
 export interface ValidationResult {

@@ -1,4 +1,5 @@
 
+
 import React, { useEffect, useCallback, useState, useMemo, useRef } from 'react';
 import { Stage, Layer, Line } from 'react-konva';
 import Konva from 'konva';
@@ -14,7 +15,7 @@ import {
   RotateCcw, RotateCw, ArrowUp, CheckCircle2, ChevronsUp, Lock, Bot, Activity
 } from 'lucide-react';
 import { UPGRADE_LOCK_QUEUE_SIZE, EXCHANGE_RATE_COINS_PER_MOVE } from '../rules/config.ts';
-import { Hex, EntityType } from '../types.ts';
+import { Hex, EntityType, EntityState } from '../types.ts';
 
 const VIEWPORT_PADDING = 200; 
 const ANIMATION_STEP_MS = 250; 
@@ -26,6 +27,18 @@ type RenderItem =
   | { type: 'CONN'; id: string; depth: number; points: number[]; color: string; dash: number[]; opacity: number };
 
 const GameView: React.FC = () => {
+  // --- STATE SELECTION ---
+  // Subscribe to the engine instance and its version to trigger re-renders
+  const engine = useGameStore(state => state.engine);
+  useGameStore(state => state.engineVersion); // This is the key to re-rendering on tick
+
+  // Select UI-specific state directly from the store
+  const { user, toast, pendingConfirmation, setUIState, hideToast, showToast, abandonSession, tick, movePlayer, togglePlayerGrowth, confirmPendingAction, cancelPendingAction } = useGameStore();
+
+  // Guard against null engine (e.g., during screen transitions)
+  if (!engine) return null;
+  const { grid, player, bots, winCondition, gameStatus, messageLog, botActivityLog, isPlayerGrowing, playerGrowthIntent, sessionStartTime } = engine.state;
+  
   // Dimensions
   const [dimensions, setDimensions] = useState({ 
     width: window.innerWidth, 
@@ -47,6 +60,9 @@ const GameView: React.FC = () => {
   const isRotating = useRef(false);
   const lastMouseX = useRef(0);
 
+  // Movement Tracking for Z-Index Stabilization
+  const movementTracker = useRef<Record<string, { lastQ: number; lastR: number; fromQ: number; fromR: number; startTime: number }>>({});
+
   // UI Local State
   const [showExitConfirmation, setShowExitConfirmation] = useState(false);
   const [isRankingsOpen, setIsRankingsOpen] = useState(window.innerWidth >= 768);
@@ -54,39 +70,27 @@ const GameView: React.FC = () => {
   const [hoveredHexId, setHoveredHexId] = useState<string | null>(null);
   const logsContainerRef = useRef<HTMLDivElement>(null);
   const botLogsContainerRef = useRef<HTMLDivElement>(null);
-  
-  const { 
-    grid, player, bots, user, winCondition, gameStatus,
-    messageLog, botActivityLog, isPlayerGrowing, playerGrowthIntent, toast, pendingConfirmation, sessionStartTime,
-    movePlayer, togglePlayerGrowth, hideToast, showToast,
-    abandonSession, processMovementStep, confirmPendingAction, cancelPendingAction
-  } = useGameStore();
 
-  // Scroll logs to bottom on update
+  // Auto-scroll log panels
   useEffect(() => {
     if (logsContainerRef.current && activeTab === 'LOGS') {
-        logsContainerRef.current.scrollTop = 0; 
+        logsContainerRef.current.scrollTop = logsContainerRef.current.scrollHeight; 
     }
     if (botLogsContainerRef.current && activeTab === 'BOTS') {
         botLogsContainerRef.current.scrollTop = 0;
     }
   }, [messageLog, botActivityLog, activeTab]);
 
-  // Movement Animation Loop
+  // Game Loop (Tick) - Attached to View Lifecycle
   useEffect(() => {
-    let interval: number;
-    if (player.movementQueue.length > 0) {
-      interval = window.setInterval(() => {
-        processMovementStep();
-      }, ANIMATION_STEP_MS);
-    }
+    const interval = setInterval(tick, 1000);
     return () => clearInterval(interval);
-  }, [player.movementQueue.length, processMovementStep]);
+  }, [tick]);
 
   // Toast Auto-Hide
   useEffect(() => {
     if (toast) {
-      const timer = setTimeout(() => hideToast(), 4000);
+      const timer = setTimeout(hideToast, 4000);
       return () => clearTimeout(timer);
     }
   }, [toast, hideToast]);
@@ -105,10 +109,7 @@ const GameView: React.FC = () => {
   const neighbors = useMemo(() => getNeighbors(player.q, player.r), [player.q, player.r]);
   const botPositions = useMemo(() => bots.map(b => ({ q: b.q, r: b.r })), [bots]);
   
-  // Logic for Buttons
-  const isMoving = player.movementQueue.length > 0;
-  
-  // STRICT RECOVERY: Only if damaged (current < max).
+  const isMoving = player.state === EntityState.MOVING;
   const canRecover = currentHex ? (currentHex.currentLevel < currentHex.maxLevel) : false;
 
   const growthCondition = useMemo(() => {
@@ -118,16 +119,10 @@ const GameView: React.FC = () => {
 
   const upgradeCondition = useMemo(() => {
     if (!currentHex) return { canGrow: false, reason: 'Invalid Hex' };
-    
-    // Simulate what happens if we were fully repaired
     const simulatedHex = { ...currentHex, currentLevel: Math.max(0, currentHex.maxLevel) };
-    
-    // Pass 'botPositions' as occupied hexes. 
-    // IMPORTANT: Player's own position is NOT passed as an obstacle, because standing on a hex shouldn't block its own upgrade neighbors.
     return checkGrowthCondition(simulatedHex, player, neighbors, grid, botPositions);
   }, [currentHex, player, grid, neighbors, botPositions]);
 
-  // Can Upgrade if: Condition met (this includes L0->L1 checks)
   const canUpgrade = upgradeCondition.canGrow; 
 
   const timeData = useMemo(() => {
@@ -195,13 +190,7 @@ const GameView: React.FC = () => {
     } else if (isBlockedByBot) {
         label = "BLOCKED";
     } else {
-        const path = findPath(
-            { q: player.q, r: player.r }, 
-            { q: hex.q, r: hex.r }, 
-            grid, 
-            player.playerLevel, 
-            obstacles
-        );
+        const path = findPath({ q: player.q, r: player.r }, { q: hex.q, r: hex.r }, grid, player.playerLevel, obstacles);
         if (path) {
             isReachable = true;
             for (const step of path) {
@@ -329,14 +318,11 @@ const GameView: React.FC = () => {
   const handleMouseUp = (e: Konva.KonvaEventObject<MouseEvent>) => {
     if (isRotating.current) {
         isRotating.current = false;
-        // Ensure we always re-enable draggable, even if focus was lost momentarily
         const stage = e.target.getStage();
         if (stage) stage.draggable(true);
     }
   };
 
-  // Safety handler if mouse leaves the window while rotating
-  // Prevents the map from getting stuck in "rotating" mode where left-click drags fail
   const handleMouseLeave = (e: Konva.KonvaEventObject<MouseEvent>) => {
       if (isRotating.current) {
           isRotating.current = false;
@@ -365,11 +351,32 @@ const GameView: React.FC = () => {
      }
 
      const allUnits = [{ ...player, isPlayer: true }, ...bots.map(b => ({ ...b, isPlayer: false }))];
+     const now = Date.now();
+
      for (const u of allUnits) {
-         const { y } = hexToPixel(u.q, u.r, cameraRotation);
-         // Z-INDEX FIX: Add +25 to depth to ensure units render ON TOP of the hex they stand on.
-         // Without this, the unit's base (y) often competes with the hex's center (y), causing clipping.
-         items.push({ type: 'UNIT', id: u.id, depth: y + 25, q: u.q, r: u.r, isPlayer: u.isPlayer });
+         let track = movementTracker.current[u.id];
+         if (!track) {
+             track = { lastQ: u.q, lastR: u.r, fromQ: u.q, fromR: u.r, startTime: 0 };
+             movementTracker.current[u.id] = track;
+         }
+         
+         if (track.lastQ !== u.q || track.lastR !== u.r) {
+             track.fromQ = track.lastQ;
+             track.fromR = track.lastR;
+             track.startTime = now;
+             track.lastQ = u.q;
+             track.lastR = u.r;
+         }
+
+         const currentPixel = hexToPixel(u.q, u.r, cameraRotation);
+         let sortY = currentPixel.y;
+         
+         if (now - track.startTime < 350) {
+             const fromPixel = hexToPixel(track.fromQ, track.fromR, cameraRotation);
+             sortY = Math.max(sortY, fromPixel.y);
+         }
+
+         items.push({ type: 'UNIT', id: u.id, depth: sortY + 25, q: u.q, r: u.r, isPlayer: u.isPlayer });
      }
 
      if (!isMoving) {
@@ -435,8 +442,7 @@ const GameView: React.FC = () => {
           <Layer>
             {renderList.map((item) => {
                 if (item.type === 'HEX') {
-                    const hex = grid[item.id];
-                    const isOccupied = (hex.q === player.q && hex.r === player.r) || bots.some(b => b.q === hex.q && b.r === hex.r);
+                    const isOccupied = (item.q === player.q && item.r === player.r) || bots.some(b => b.q === item.q && b.r === item.r);
                     return <Hexagon key={item.id} id={item.id} rotation={cameraRotation} isPlayerNeighbor={playerNeighborKeys.has(item.id)} playerRank={player.playerLevel} isOccupied={isOccupied} onHexClick={movePlayer} onHover={setHoveredHexId} />;
                 } else if (item.type === 'UNIT') {
                     const unit = item.isPlayer ? player : bots.find(b => b.id === item.id);
@@ -576,7 +582,7 @@ const GameView: React.FC = () => {
               {activeTab === 'LOGS' && (
                   <div ref={logsContainerRef} className="flex flex-col-reverse gap-1.5">
                      {messageLog.map((msg, idx) => (
-                        <div key={idx} className="bg-slate-800/50 border-l-2 border-cyan-500/50 px-2 py-1.5 text-[10px] font-mono text-cyan-100/90 rounded-r-md">
+                        <div key={`${msg}-${idx}`} className="bg-slate-800/50 border-l-2 border-cyan-500/50 px-2 py-1.5 text-[10px] font-mono text-cyan-100/90 rounded-r-md">
                           {msg}
                         </div>
                      ))}
@@ -708,6 +714,47 @@ const GameView: React.FC = () => {
           <div className="mx-auto bg-red-950/95 border border-red-500/50 text-red-100 px-4 py-3 rounded-2xl shadow-[0_0_30px_rgba(239,68,68,0.6)] backdrop-blur-xl flex flex-col md:flex-row items-center justify-center gap-2 md:gap-3 animate-in fade-in slide-in-from-bottom-4 md:slide-in-from-top-4 duration-300">
              <AlertTriangle className="w-5 h-5 text-red-500 shrink-0" /><span className="text-xs md:text-sm font-bold uppercase tracking-wider text-center leading-tight break-words">{toast.message}</span>
           </div>
+        </div>
+      )}
+
+      { (gameStatus === 'VICTORY' || gameStatus === 'DEFEAT') && (
+        <div className="absolute inset-0 z-[80] bg-black/80 backdrop-blur-lg flex items-center justify-center pointer-events-auto p-4 animate-in fade-in duration-500">
+            <div className="bg-slate-900 border border-slate-700 p-8 rounded-3xl shadow-2xl max-w-lg w-full text-center relative overflow-hidden">
+                <div className={`absolute top-0 left-0 w-full h-1 bg-gradient-to-r ${gameStatus === 'VICTORY' ? 'from-transparent via-amber-500 to-transparent' : 'from-transparent via-red-500 to-transparent'}`}></div>
+                <div className={`mx-auto w-16 h-16 rounded-full flex items-center justify-center mb-4 border-2 ${gameStatus === 'VICTORY' ? 'bg-amber-500/10 border-amber-500/30' : 'bg-red-500/10 border-red-500/30'}`}>
+                    {gameStatus === 'VICTORY' ? <Trophy className="w-8 h-8 text-amber-500" /> : <Shield className="w-8 h-8 text-red-500" />}
+                </div>
+                <h2 className={`text-4xl font-black mb-2 uppercase tracking-wider ${gameStatus === 'VICTORY' ? 'text-amber-400' : 'text-red-500'}`}>
+                    {gameStatus}
+                </h2>
+                <p className="text-slate-400 text-sm mb-8">{winCondition?.label} Objective {gameStatus === 'VICTORY' ? 'Achieved' : 'Failed'}.</p>
+
+                <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 mb-8 flex justify-around text-left">
+                    <div className="flex flex-col">
+                        <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Session Time</span>
+                        <span className="text-white font-mono font-bold text-lg">{formatTime(Date.now() - sessionStartTime)}</span>
+                    </div>
+                    <div className="w-px bg-slate-800"></div>
+                    <div className="flex flex-col">
+                        <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Total Credits</span>
+                        <span className="text-amber-400 font-mono font-bold text-lg">{player.totalCoinsEarned}</span>
+                    </div>
+                    <div className="w-px bg-slate-800"></div>
+                    <div className="flex flex-col">
+                        <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Final Rank</span>
+                        <span className="text-indigo-400 font-mono font-bold text-lg">L{player.playerLevel}</span>
+                    </div>
+                </div>
+
+                <div className="flex gap-4">
+                    <button onClick={abandonSession} className="flex-1 py-4 bg-slate-800 hover:bg-slate-700 rounded-xl text-slate-300 font-bold text-xs uppercase tracking-wider transition-colors">
+                        Main Menu
+                    </button>
+                    <button onClick={() => { abandonSession(); setUIState('LEADERBOARD'); }} className="flex-1 py-4 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-white font-bold text-xs uppercase tracking-wider shadow-lg shadow-indigo-500/20 transition-colors">
+                        View Leaderboard
+                    </button>
+                </div>
+            </div>
         </div>
       )}
     </div>

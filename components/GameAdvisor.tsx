@@ -1,3 +1,0 @@
-
-// Deleted
-export default () => null;

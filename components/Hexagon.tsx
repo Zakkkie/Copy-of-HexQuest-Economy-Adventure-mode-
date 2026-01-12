@@ -1,4 +1,5 @@
 
+
 import React, { useEffect, useRef, useMemo } from 'react';
 import { Group, Path, Shape } from 'react-konva';
 import Konva from 'konva';
@@ -223,7 +224,7 @@ interface SmartHexagonProps {
 }
 
 const SmartHexagon: React.FC<SmartHexagonProps> = React.memo((props) => {
-  const hex = useGameStore(state => state.grid[props.id]);
+  const hex = useGameStore(state => state.engine?.state.grid[props.id]);
   if (!hex) return null;
   return <HexagonVisual hex={hex} {...props} />;
 });

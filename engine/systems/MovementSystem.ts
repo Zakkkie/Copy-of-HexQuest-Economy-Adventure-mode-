@@ -1,12 +1,13 @@
 
+
 import { System } from './System';
-import { GameState, GameEvent, EntityState, Entity } from '../../types';
+import { GameState, GameEvent, EntityState, Entity, SessionState } from '../../types';
 import { WorldIndex } from '../WorldIndex';
 import { getHexKey, getNeighbors } from '../../services/hexUtils';
 import { GameEventFactory } from '../events';
 
 export class MovementSystem implements System {
-  update(state: GameState, index: WorldIndex, events: GameEvent[]): void {
+  update(state: SessionState, index: WorldIndex, events: GameEvent[]): void {
     const entities = [state.player, ...state.bots];
 
     for (const entity of entities) {
@@ -14,7 +15,7 @@ export class MovementSystem implements System {
     }
   }
 
-  private processEntity(entity: Entity, state: GameState, index: WorldIndex, events: GameEvent[]) {
+  private processEntity(entity: Entity, state: SessionState, index: WorldIndex, events: GameEvent[]) {
     // FSM Guard: Only IDLE or MOVING allowed
     if (entity.state !== EntityState.IDLE && entity.state !== EntityState.MOVING) {
       return;
@@ -44,11 +45,12 @@ export class MovementSystem implements System {
           entity.state = EntityState.IDLE;
           
           const blockerId = index.getEntityAt(nextStep.q, nextStep.r)?.id || 'UNKNOWN';
-          events.push(GameEventFactory.create(
-              'ACTION_DENIED', 
-              `Path Blocked by ${blockerId}`, 
-              entity.id
-          ));
+          const msg = `Path Blocked by ${blockerId}`;
+          const formattedMsg = `[${entity.id}] ${msg}`;
+          state.messageLog.unshift(formattedMsg);
+          if (state.messageLog.length > 100) state.messageLog.pop();
+          
+          events.push(GameEventFactory.create('ACTION_DENIED', msg, entity.id));
           return;
       }
     }

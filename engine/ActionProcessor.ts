@@ -1,44 +1,80 @@
 
-import { GameState, BotAction, EntityType, EntityState, ValidationResult } from '../types';
+
+import { GameState, GameAction, EntityType, EntityState, ValidationResult, SessionState } from '../types';
 import { WorldIndex } from './WorldIndex';
 import { getHexKey } from '../services/hexUtils';
 import { checkGrowthCondition } from '../rules/growth';
+import { GAME_CONFIG } from '../rules/config';
 
+/**
+ * ActionProcessor is now a STATELESS service.
+ * It operates on the state object passed into its methods.
+ */
 export class ActionProcessor {
+  constructor() {}
   
-  static validateAction(state: GameState, index: WorldIndex, actorId: string, action: BotAction): ValidationResult {
+  public validateAction(state: SessionState, index: WorldIndex, actorId: string, action: GameAction): ValidationResult {
     const actor = state.player.id === actorId ? state.player : state.bots.find(b => b.id === actorId);
     if (!actor) return { ok: false, reason: 'Entity not found' };
 
-    // 1. Race Condition Check
     if (action.stateVersion !== undefined && action.stateVersion !== state.stateVersion) {
          return { ok: false, reason: `STALE STATE (v${action.stateVersion} vs v${state.stateVersion})` };
     }
 
-    // 2. Resource / Status Checks
     if (actor.state === EntityState.LOCKED) return { ok: false, reason: 'Actor Locked' };
+    if (actor.state === EntityState.MOVING && action.type === 'MOVE') return { ok: false, reason: 'Already moving' };
 
-    // 3. Specific Action Rules
-    if (action.type === 'UPGRADE') {
-       const key = getHexKey(action.coord.q, action.coord.r);
-       const hex = state.grid[key];
-       if (!hex) return { ok: false, reason: 'Invalid Coord' };
+    switch (action.type) {
+        case 'UPGRADE': {
+            const key = getHexKey(action.coord.q, action.coord.r);
+            const hex = state.grid[key];
+            if (!hex) return { ok: false, reason: 'Invalid Coord' };
 
-       const neighbors = index.getValidNeighbors(action.coord.q, action.coord.r).map(h => ({q:h.q, r:h.r}));
-       const occupied = index.getOccupiedHexesList();
-       
-       const check = checkGrowthCondition(hex, actor, neighbors, state.grid, occupied);
-       if (!check.canGrow) return { ok: false, reason: check.reason };
-    }
+            const neighbors = index.getValidNeighbors(action.coord.q, action.coord.r).map(h => ({q:h.q, r:h.r}));
+            const occupied = index.getOccupiedHexesList();
+            
+            const check = checkGrowthCondition(hex, actor, neighbors, state.grid, occupied);
+            if (!check.canGrow) return { ok: false, reason: check.reason };
+            break;
+        }
+        case 'MOVE': {
+            if (action.path.length === 0) return { ok: false, reason: 'Empty Path' };
+            
+            const destination = action.path[action.path.length - 1];
+            const entityAtDest = index.getEntityAt(destination.q, destination.r);
+            if (entityAtDest && entityAtDest.id !== actor.id) {
+                return { ok: false, reason: `Destination (${destination.q},${destination.r}) is occupied by ${entityAtDest.id}` };
+            }
 
-    if (action.type === 'MOVE') {
-        if (action.path.length === 0) return { ok: false, reason: 'Empty Path' };
+            let totalMoveCost = 0;
+            for (const step of action.path) {
+                const hex = state.grid[getHexKey(step.q, step.r)];
+                totalMoveCost += (hex && hex.maxLevel >= 2) ? hex.maxLevel : 1;
+            }
+            const costMoves = Math.min(actor.moves, totalMoveCost);
+            const costCoins = (totalMoveCost - costMoves) * GAME_CONFIG.EXCHANGE_RATE_COINS_PER_MOVE;
+
+            if (actor.coins < costCoins) {
+                return { ok: false, reason: `Insufficient credits. Need ${costCoins}, have ${actor.coins}.` };
+            }
+            break;
+        }
+        case 'RECHARGE_MOVE': {
+            if (actor.coins < GAME_CONFIG.EXCHANGE_RATE_COINS_PER_MOVE) {
+                return { ok: false, reason: 'Insufficient credits for recharge.' };
+            }
+            break;
+        }
     }
 
     return { ok: true };
   }
 
-  static applyAction(state: GameState, index: WorldIndex, actorId: string, action: BotAction): ValidationResult {
+  /**
+   * Applies an action by MUTATING the passed-in state object.
+   * This is safe because the GameEngine provides a deep copy.
+   */
+  public applyAction(state: SessionState, index: WorldIndex, actorId: string, action: GameAction): ValidationResult {
     const validation = this.validateAction(state, index, actorId, action);
     const actor = state.player.id === actorId ? state.player : state.bots.find(b => b.id === actorId);
     
@@ -53,28 +89,43 @@ export class ActionProcessor {
 
     if (!actor) return { ok: false, reason: 'Actor vanished' };
 
-    // Clear Fail State
     if (actor.memory) {
         actor.memory.lastActionFailed = false;
         actor.memory.failReason = undefined;
     }
 
-    // Interrupt Growing
     if (actor.state === EntityState.GROWING && action.type === 'MOVE') {
         actor.state = EntityState.IDLE;
+        if (actor.id === state.player.id) {
+            state.isPlayerGrowing = false;
+            state.playerGrowthIntent = null;
+        }
     }
 
     switch (action.type) {
-      case 'MOVE':
+      case 'MOVE': {
+        let totalMoveCost = 0;
+        for (const step of action.path) {
+            const hex = state.grid[getHexKey(step.q, step.r)];
+            totalMoveCost += (hex && hex.maxLevel >= 2) ? hex.maxLevel : 1;
+        }
+        const costMoves = Math.min(actor.moves, totalMoveCost);
+        const costCoins = (totalMoveCost - costMoves) * GAME_CONFIG.EXCHANGE_RATE_COINS_PER_MOVE;
+
+        actor.moves -= costMoves;
+        actor.coins -= costCoins;
+        
         actor.movementQueue = action.path;
         break;
-
+      }
       case 'UPGRADE':
         actor.movementQueue = [{ q: action.coord.q, r: action.coord.r, upgrade: true }];
         break;
-        
+      case 'RECHARGE_MOVE':
+        actor.coins -= GAME_CONFIG.EXCHANGE_RATE_COINS_PER_MOVE;
+        actor.moves += 1;
+        break;
       case 'WAIT':
-        // No-op, just consumes a tick decision
         break;
     }
     

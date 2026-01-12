@@ -1,5 +1,7 @@
+
+
 import { create } from 'zustand';
-import { GameState, Entity, Hex, EntityType, UIState, WinCondition, LeaderboardEntry, EntityState } from './types.ts';
+import { GameState, Entity, Hex, EntityType, UIState, WinCondition, LeaderboardEntry, EntityState, MoveAction, RechargeAction, SessionState } from './types.ts';
 import { GAME_CONFIG } from './rules/config.ts';
 import { getHexKey, getNeighbors, findPath } from './services/hexUtils.ts';
 import { GameEngine } from './engine/GameEngine.ts';
@@ -7,13 +9,16 @@ import { checkGrowthCondition } from './rules/growth.ts';
 
 const MOCK_USER_DB: Record<string, { password: string; avatarColor: string; avatarIcon: string }> = {};
 const BOT_PALETTE = ['#ef4444', '#f97316', '#a855f7', '#ec4899']; 
-let MOCK_LEADERBOARD: LeaderboardEntry[] = [
+const INITIAL_LEADERBOARD: LeaderboardEntry[] = [
   { nickname: 'SENTINEL_AI', avatarColor: '#ef4444', avatarIcon: 'bot', maxCoins: 2500, maxLevel: 12, timestamp: Date.now() - 100000 },
 ];
 
 interface AuthResponse { success: boolean; message?: string; }
 
-interface GameActions {
+interface GameStore extends GameState {
+  engine: GameEngine | null;
+  engineVersion: number;
+
   setUIState: (state: UIState) => void;
   loginAsGuest: (n: string, c: string, i: string) => void;
   registerUser: (n: string, p: string, c: string, i: string) => AuthResponse;
@@ -26,35 +31,28 @@ interface GameActions {
   movePlayer: (q: number, r: number) => void;
   confirmPendingAction: () => void;
   cancelPendingAction: () => void;
-  processMovementStep: () => void;
   tick: () => void;
   showToast: (msg: string, type: 'error' | 'success' | 'info') => void;
   hideToast: () => void;
 }
 
-type GameStore = GameState & GameActions;
-
-// --- INITIAL DATA GENERATION ---
-const createInitialHex = (q: number, r: number, startLevel = 0): Hex => ({
-  id: getHexKey(q, r), q, r, currentLevel: 0, maxLevel: startLevel, progress: 0, revealed: true
-});
-
-const generateInitialGameData = (winCondition: WinCondition | null) => {
-  const startHex = createInitialHex(0, 0, 0);
+// Generates the data for a NEW game session. UI state is not part of this.
+const createInitialSessionData = (winCondition: WinCondition): SessionState => {
+  const startHex = { id: getHexKey(0,0), q:0, r:0, currentLevel: 0, maxLevel: 0, progress: 0, revealed: true };
   const initialGrid: Record<string, Hex> = { [getHexKey(0,0)]: startHex };
-  getNeighbors(0, 0).forEach(n => { initialGrid[getHexKey(n.q, n.r)] = createInitialHex(n.q, n.r, 0); });
+  getNeighbors(0, 0).forEach(n => { initialGrid[getHexKey(n.q, n.r)] = { id: getHexKey(n.q,n.r), q:n.q, r:n.r, currentLevel:0, maxLevel:0, progress:0, revealed:true }; });
   
-  const botCount = winCondition?.botCount || 1;
+  const botCount = winCondition.botCount || 1;
   const bots: Entity[] = [];
   const spawnPoints = [{ q: 0, r: -2 }, { q: 2, r: -2 }, { q: 2, r: 0 }, { q: 0, r: 2 }, { q: -2, r: 2 }, { q: -2, r: 0 }];
 
   for (let i = 0; i < Math.min(botCount, spawnPoints.length); i++) {
     const sp = spawnPoints[i];
     if (!initialGrid[getHexKey(sp.q, sp.r)]) {
-        initialGrid[getHexKey(sp.q, sp.r)] = createInitialHex(sp.q, sp.r, 0);
+        initialGrid[getHexKey(sp.q, sp.r)] = { id: getHexKey(sp.q,sp.r), q:sp.q, r:sp.r, currentLevel:0, maxLevel:0, progress:0, revealed:true };
         getNeighbors(sp.q, sp.r).forEach(n => {
             const k = getHexKey(n.q, n.r);
-            if (!initialGrid[k]) initialGrid[k] = createInitialHex(n.q, n.r, 0);
+            if (!initialGrid[k]) initialGrid[k] = { id:k, q:n.q, r:n.r, currentLevel:0, maxLevel:0, progress:0, revealed:true };
         });
     }
     bots.push({
@@ -67,7 +65,7 @@ const generateInitialGameData = (winCondition: WinCondition | null) => {
   }
   
   return {
-    stateVersion: 0, // Init Version
+    stateVersion: 0,
     sessionId: Math.random().toString(36).substring(2, 15),
     sessionStartTime: Date.now(),
     winCondition,
@@ -75,32 +73,33 @@ const generateInitialGameData = (winCondition: WinCondition | null) => {
     player: {
       id: 'player-1', type: EntityType.PLAYER, state: EntityState.IDLE, q: 0, r: 0,
       playerLevel: 0, coins: GAME_CONFIG.INITIAL_COINS, moves: GAME_CONFIG.INITIAL_MOVES,
-      totalCoinsEarned: 0, recentUpgrades: [], movementQueue: []
-    } as Entity,
+      totalCoinsEarned: 0, recentUpgrades: [], movementQueue: [],
+    },
     bots,
     currentTurn: 0,
     messageLog: ['System Online.'],
     botActivityLog: [], 
-    gameStatus: 'PLAYING' as const,
-    pendingConfirmation: null,
+    gameStatus: 'PLAYING',
+    lastBotActionTime: Date.now(),
     isPlayerGrowing: false,
     playerGrowthIntent: null,
     growingBotIds: [],
-    lastBotActionTime: Date.now(),
-    toast: null,
-    leaderboard: [...MOCK_LEADERBOARD],
-    hasActiveSession: false,
     telemetry: []
   };
 };
 
-// --- ENGINE INSTANCE ---
-let engine: GameEngine | null = null;
-
 export const useGameStore = create<GameStore>((set, get) => ({
+  // UI and Cross-Session State
   uiState: 'MENU',
   user: null,
-  ...generateInitialGameData(null),
+  toast: null,
+  pendingConfirmation: null,
+  leaderboard: [...INITIAL_LEADERBOARD],
+  hasActiveSession: false,
+  
+  // Engine State
+  engine: null,
+  engineVersion: 0,
   
   setUIState: (uiState) => set({ uiState }),
   
@@ -108,65 +107,73 @@ export const useGameStore = create<GameStore>((set, get) => ({
   loginAsGuest: (nickname, avatarColor, avatarIcon) => set({ user: { isAuthenticated: true, isGuest: true, nickname, avatarColor, avatarIcon } }),
   registerUser: (nickname, password, avatarColor, avatarIcon) => { MOCK_USER_DB[nickname] = { password, avatarColor, avatarIcon }; set({ user: { isAuthenticated: true, isGuest: false, nickname, avatarColor, avatarIcon } }); return { success: true }; },
   loginUser: (nickname, password) => { const r = MOCK_USER_DB[nickname]; if (!r || r.password !== password) return { success: false }; set({ user: { isAuthenticated: true, isGuest: false, nickname, avatarColor: r.avatarColor, avatarIcon: r.avatarIcon } }); return { success: true }; },
-  logout: () => set({ ...generateInitialGameData(null), user: null, uiState: 'MENU', hasActiveSession: false }),
+  logout: () => {
+    get().abandonSession();
+    set({ user: null });
+  },
 
   // Game Lifecycle
   startNewGame: (winCondition) => {
-      const initialData = generateInitialGameData(winCondition);
-      const currentUser = get().user;
-      const fullState: GameState = {
-        ...initialData,
-        user: currentUser,
-        uiState: 'GAME'
-      };
-      engine = new GameEngine(fullState); 
-      set({ ...initialData, user: currentUser, hasActiveSession: true, uiState: 'GAME' });
+      get().abandonSession(); // Ensure old engine is destroyed
+      const initialSessionState = createInitialSessionData(winCondition);
+      const newEngine = new GameEngine(initialSessionState); 
+      set({ engine: newEngine, hasActiveSession: true, uiState: 'GAME', engineVersion: 1 });
   },
 
   abandonSession: () => {
-      engine = null;
-      set((state) => ({ ...generateInitialGameData(null), user: state.user, uiState: 'MENU', hasActiveSession: false, gameStatus: 'GAME_OVER' }));
+      const engine = get().engine;
+      if (engine) {
+          engine.destroy();
+          set({ engine: null, hasActiveSession: false, uiState: 'MENU' });
+      }
   },
   
   showToast: (message, type) => set({ toast: { message, type, timestamp: Date.now() } }),
   hideToast: () => set({ toast: null }),
 
-  // Player Actions
-  togglePlayerGrowth: (intent: 'RECOVER' | 'UPGRADE' = 'RECOVER') => set(state => {
-      if (state.uiState !== 'GAME' || state.player.movementQueue.length > 0) return state;
+  // Player Actions (delegated to engine)
+  togglePlayerGrowth: (intent: 'RECOVER' | 'UPGRADE' = 'RECOVER') => {
+      const { engine } = get();
+      if (!engine) return;
+      const { state } = engine;
+
+      // FIX: The `state.uiState` check was incorrect as uiState is not on the engine's session state.
+      // Removed the check. The moving check is the only one needed.
+      if (state.player.state === EntityState.MOVING) return;
       
-      // Toggle Off
-      if (state.isPlayerGrowing) {
-          // Sync with Engine
-          if (engine) engine.setPlayerIntent(false, null);
-          return { isPlayerGrowing: false, playerGrowthIntent: null };
+      const isCurrentlyGrowing = state.isPlayerGrowing;
+      engine.setPlayerIntent(!isCurrentlyGrowing, isCurrentlyGrowing ? null : intent);
+
+      set(s => ({ engineVersion: s.engineVersion + 1 }));
+  },
+
+  rechargeMove: () => {
+      const { engine } = get();
+      if (!engine) return;
+
+      const action: RechargeAction = { type: 'RECHARGE_MOVE', stateVersion: engine.state.stateVersion };
+      const res = engine.applyAction(engine.state.player.id, action);
+      if (res.ok) {
+        set(s => ({ engineVersion: s.engineVersion + 1 }));
+      } else {
+        set({ toast: { message: res.reason || "Recharge Failed", type: 'error', timestamp: Date.now() } });
       }
+  },
 
-      // Validation
-      const hex = state.grid[getHexKey(state.player.q, state.player.r)];
-      const neighbors = getNeighbors(state.player.q, state.player.r);
-      const others = state.bots.map(b => ({ q: b.q, r: b.r }));
-      const check = checkGrowthCondition(hex, state.player, neighbors, state.grid, others);
+  movePlayer: (tq, tr) => {
+      const { engine } = get();
+      if (!engine) return;
+      const { state } = engine;
 
-      if (!check.canGrow && intent === 'UPGRADE') return { toast: { message: check.reason || "Denied", type: 'error', timestamp: Date.now() } };
-      
-      // Toggle On - Sync with Engine
-      if (engine) engine.setPlayerIntent(true, intent);
-      return { isPlayerGrowing: true, playerGrowthIntent: intent };
-  }),
-
-  rechargeMove: () => set(state => {
-      if (state.player.coins < GAME_CONFIG.EXCHANGE_RATE_COINS_PER_MOVE) return state;
-      return { player: { ...state.player, coins: state.player.coins - GAME_CONFIG.EXCHANGE_RATE_COINS_PER_MOVE, moves: state.player.moves + 1 } };
-  }),
-
-  movePlayer: (tq, tr) => set(state => {
-      if (state.player.movementQueue.length > 0) return state;
+      if (state.player.state === EntityState.MOVING) return;
       
       const obstacles = state.bots.map(b => ({ q: b.q, r: b.r }));
       const path = findPath({ q: state.player.q, r: state.player.r }, { q: tq, r: tr }, state.grid, state.player.playerLevel, obstacles);
       
-      if (!path) return { toast: { message: "Path Blocked", type: 'error', timestamp: Date.now() } };
+      if (!path) {
+        set({ toast: { message: "Path Blocked", type: 'error', timestamp: Date.now() } });
+        return;
+      }
 
       let totalMoveCost = 0;
       for (const step of path) {
@@ -177,77 +184,92 @@ export const useGameStore = create<GameStore>((set, get) => ({
       const costMoves = Math.min(state.player.moves, totalMoveCost);
       const costCoins = (totalMoveCost - costMoves) * GAME_CONFIG.EXCHANGE_RATE_COINS_PER_MOVE;
 
-      if (state.player.coins < costCoins) return { toast: { message: `Need ${totalMoveCost} moves`, type: 'error', timestamp: Date.now() } };
-      if (costCoins > 0) return { pendingConfirmation: { type: 'MOVE_WITH_COINS', data: { path, costMoves, costCoins } } };
+      if (state.player.coins < costCoins) {
+        set({ toast: { message: `Need ${costCoins} credits`, type: 'error', timestamp: Date.now() } });
+        return;
+      }
+      if (costCoins > 0) {
+        set({ pendingConfirmation: { type: 'MOVE_WITH_COINS', data: { path, costMoves, costCoins } } });
+        return;
+      }
 
-      if (!engine) return state;
+      const action: MoveAction = { type: 'MOVE', path, stateVersion: state.stateVersion };
+      const res = engine.applyAction(state.player.id, action);
+      if (res.ok) {
+        set(s => ({ engineVersion: s.engineVersion + 1, isPlayerGrowing: false, playerGrowthIntent: null }));
+      } else {
+        set({ toast: { message: res.reason || "Error", type: 'error', timestamp: Date.now() } });
+      }
+  },
+
+  confirmPendingAction: () => {
+      const { engine, pendingConfirmation } = get();
+      if (!engine || !pendingConfirmation) return;
+
+      const { path } = pendingConfirmation.data;
+      const action: MoveAction = { type: 'MOVE', path, stateVersion: engine.state.stateVersion };
       
-      // Pass stateVersion for safety (optional for synchronous UI actions but good practice)
-      const res = engine.applyAction(state.player.id, { type: 'MOVE', path, stateVersion: state.stateVersion });
-      
-      if (!res.ok) return { toast: { message: res.reason || "Error", type: 'error', timestamp: Date.now() } };
-
-      const syncedState = engine.state;
-      return { 
-          player: { ...syncedState.player }, 
-          moves: syncedState.player.moves, // Explicit sync
-          isPlayerGrowing: false, 
-          playerGrowthIntent: null,
-          grid: syncedState.grid,
-          stateVersion: syncedState.stateVersion
-      };
-  }),
-
-  confirmPendingAction: () => set(state => {
-      if (!state.pendingConfirmation || !engine) return state;
-      const { path } = state.pendingConfirmation.data;
-      
-      const res = engine.applyAction(state.player.id, { type: 'MOVE', path, stateVersion: state.stateVersion });
-      if (!res.ok) return { toast: { message: res.reason || "Error", type: 'error', timestamp: Date.now() }, pendingConfirmation: null };
-
-      const syncedState = engine.state;
-      return { 
-          player: syncedState.player, 
-          pendingConfirmation: null, 
-          isPlayerGrowing: false, 
-          playerGrowthIntent: null,
-          grid: syncedState.grid,
-          stateVersion: syncedState.stateVersion
-      };
-  }),
+      const res = engine.applyAction(engine.state.player.id, action);
+      if (res.ok) {
+        set(s => ({ engineVersion: s.engineVersion + 1, pendingConfirmation: null, isPlayerGrowing: false, playerGrowthIntent: null }));
+      } else {
+        set({ toast: { message: res.reason || "Error", type: 'error', timestamp: Date.now() }, pendingConfirmation: null });
+      }
+  },
 
   cancelPendingAction: () => set({ pendingConfirmation: null }),
 
-  processMovementStep: () => set(state => {
-      // Visual interpolation only, Logic handled in Tick
-      return state;
-  }),
-
   // MAIN LOOP
-  tick: () => set(state => {
-      if (state.uiState !== 'GAME' || state.gameStatus !== 'PLAYING' || !engine) return state;
+  tick: () => {
+      const { engine } = get();
+      if (!engine || engine.state.gameStatus !== 'PLAYING') return;
       
       const result = engine.processTick();
-      
-      let newLog = state.messageLog;
-      let newToast = state.toast;
+      let newToast = get().toast;
+      let leaderboardUpdated = false;
       
       if (result.events.length > 0) {
-          const logMessages = result.events
-             .filter(e => e.message && e.type !== 'BOT_LOG') 
-             .map(e => e.message as string);
-          
-          if (logMessages.length > 0) {
-              newLog = [...logMessages.reverse(), ...state.messageLog].slice(0, 50);
-          }
-          
           const error = result.events.find(e => e.type === 'ACTION_DENIED' || e.type === 'ERROR');
-          if (error && error.entityId === state.player.id) {
+          if (error && error.entityId === engine.state.player.id) {
               newToast = { message: error.message || 'Error', type: 'error', timestamp: Date.now() };
+          }
+
+          const leaderboardEvent = result.events.find(e => e.type === 'LEADERBOARD_UPDATE');
+          if (leaderboardEvent && leaderboardEvent.data?.entry) {
+              const newEntry = leaderboardEvent.data.entry as LeaderboardEntry;
+              const currentLeaderboard = get().leaderboard;
+
+              const existingIndex = currentLeaderboard.findIndex(e => e.nickname === newEntry.nickname);
+              let shouldUpdate = false;
+
+              if (existingIndex > -1) {
+                  const existing = currentLeaderboard[existingIndex];
+                  const existingScore = existing.maxCoins + existing.maxLevel * 100;
+                  const newScore = newEntry.maxCoins + newEntry.maxLevel * 100;
+                  if (newScore > existingScore) {
+                      currentLeaderboard[existingIndex] = newEntry;
+                      shouldUpdate = true;
+                  }
+              } else {
+                  currentLeaderboard.push(newEntry);
+                  shouldUpdate = true;
+              }
+
+              if (shouldUpdate) {
+                  currentLeaderboard.sort((a, b) => {
+                      const scoreA = a.maxCoins + (a.maxLevel * 100);
+                      const scoreB = b.maxCoins + (b.maxLevel * 100);
+                      return scoreB - scoreA;
+                  });
+                  leaderboardUpdated = true;
+              }
           }
       }
 
-      // Sync Store with Engine State
-      return { ...result.state, messageLog: newLog, toast: newToast };
-  })
+      set(state => ({ 
+          engineVersion: state.engineVersion + 1,
+          toast: newToast,
+          leaderboard: leaderboardUpdated ? [...state.leaderboard] : state.leaderboard,
+      }));
+  }
 }));

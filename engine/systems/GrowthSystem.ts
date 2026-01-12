@@ -1,6 +1,7 @@
 
+
 import { System } from './System';
-import { GameState, GameEvent, EntityState, Entity, EntityType } from '../../types';
+import { GameState, GameEvent, EntityState, Entity, EntityType, SessionState } from '../../types';
 import { WorldIndex } from '../WorldIndex';
 import { getHexKey } from '../../services/hexUtils';
 import { GameEventFactory } from '../events';
@@ -8,7 +9,7 @@ import { checkGrowthCondition } from '../../rules/growth';
 import { getLevelConfig, GAME_CONFIG } from '../../rules/config';
 
 export class GrowthSystem implements System {
-  update(state: GameState, index: WorldIndex, events: GameEvent[]): void {
+  update(state: SessionState, index: WorldIndex, events: GameEvent[]): void {
     const entities = [state.player, ...state.bots];
     const newGrowingBotIds: string[] = [];
 
@@ -32,7 +33,7 @@ export class GrowthSystem implements System {
     state.growingBotIds = newGrowingBotIds;
   }
 
-  private processEntity(entity: Entity, state: GameState, index: WorldIndex, events: GameEvent[]): boolean {
+  private processEntity(entity: Entity, state: SessionState, index: WorldIndex, events: GameEvent[]): boolean {
     const hasUpgradeCmd = entity.movementQueue.length > 0 && entity.movementQueue[0].upgrade;
     
     // Determine Intent
@@ -78,7 +79,10 @@ export class GrowthSystem implements System {
       
       // Notify player why growth stopped
       if (entity.type === EntityType.PLAYER) {
-         events.push(GameEventFactory.create('ACTION_DENIED', condition.reason || "Growth Conditions Not Met", entity.id));
+         const msg = condition.reason || "Growth Conditions Not Met";
+         state.messageLog.unshift(`[YOU] ${msg}`);
+         if (state.messageLog.length > 100) state.messageLog.pop();
+         events.push(GameEventFactory.create('ACTION_DENIED', msg, entity.id));
          state.isPlayerGrowing = false; // Force stop in store
       }
       return false;
@@ -111,11 +115,17 @@ export class GrowthSystem implements System {
              if (q.length > GAME_CONFIG.UPGRADE_LOCK_QUEUE_SIZE) q.shift();
              entity.recentUpgrades = q;
              
-             events.push(GameEventFactory.create('SECTOR_ACQUIRED', `${prefix} Sector L1 Acquired`, entity.id));
+             const msg = `${prefix} Sector L1 Acquired`;
+             state.messageLog.unshift(msg);
+             if (state.messageLog.length > 100) state.messageLog.pop();
+             events.push(GameEventFactory.create('SECTOR_ACQUIRED', msg, entity.id));
         } else {
              // LEVEL UP
              // Optional: Reset queue on Rank Up? Currently keeping it simple.
-             events.push(GameEventFactory.create('LEVEL_UP', `${prefix} Reached Rank L${targetLevel}`, entity.id));
+             const msg = `${prefix} Reached Rank L${targetLevel}`;
+             state.messageLog.unshift(msg);
+             if (state.messageLog.length > 100) state.messageLog.pop();
+             events.push(GameEventFactory.create('LEVEL_UP', msg, entity.id));
         }
       }
 

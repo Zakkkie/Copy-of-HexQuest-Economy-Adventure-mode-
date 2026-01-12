@@ -40,7 +40,7 @@ export { checkGrowthCondition } from '../rules/growth';
 export const findPath = (start: HexCoord, end: HexCoord, grid: Record<string, Hex>, rank: number, obstacles: HexCoord[]): HexCoord[] | null => {
   const startKey = getHexKey(start.q, start.r);
   const endKey = getHexKey(end.q, end.r);
-  if (startKey === endKey) return null;
+  if (startKey === endKey) return [];
   
   // O(1) Lookup
   const obsKeys = new Set(obstacles.map(o => getHexKey(o.q, o.r)));

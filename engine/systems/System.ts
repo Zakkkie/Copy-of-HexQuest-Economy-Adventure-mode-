@@ -1,5 +1,6 @@
 
-import { GameState, GameEvent } from '../../types';
+
+import { GameState, GameEvent, SessionState } from '../../types';
 import { WorldIndex } from '../WorldIndex';
 
 export interface System {
@@ -9,5 +10,5 @@ export interface System {
    * @param index The spatial index for queries.
    * @param events A list to push new game events into.
    */
-  update(state: GameState, index: WorldIndex, events: GameEvent[]): void;
+  update(state: SessionState, index: WorldIndex, events: GameEvent[]): void;
 }

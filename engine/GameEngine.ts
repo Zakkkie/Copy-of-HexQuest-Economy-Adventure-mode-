@@ -1,5 +1,6 @@
 
-import { GameState, BotAction, GameEvent, ValidationResult } from '../types';
+
+import { GameState, GameAction, GameEvent, ValidationResult, SessionState } from '../types';
 import { WorldIndex } from './WorldIndex';
 import { System } from './systems/System';
 import { MovementSystem } from './systems/MovementSystem';
@@ -9,74 +10,65 @@ import { VictorySystem } from './systems/VictorySystem';
 import { ActionProcessor } from './ActionProcessor';
 
 export interface TickResult {
-  state: GameState;
+  state: SessionState;
   events: GameEvent[];
 }
 
 /**
  * GameEngine - Architecture Refactor
- * Orchestrates Systems and holds the authoritative state.
+ * Orchestrates Systems and holds the authoritative state for a single game session.
+ * Uses an instance of ActionProcessor to handle command validation and application.
+ * State is treated as immutable between ticks/actions.
  */
 export class GameEngine {
-  private _state: GameState;
+  private _state: SessionState;
   private _index: WorldIndex;
   private _systems: System[];
+  private _actionProcessor: ActionProcessor;
 
-  constructor(initialState: GameState) {
+  constructor(initialState: SessionState) {
     this._state = JSON.parse(JSON.stringify(initialState));
     this._state.stateVersion = this._state.stateVersion || 0;
     
-    // Initialize WorldIndex
     this._index = new WorldIndex(this._state.grid, [this._state.player, ...this._state.bots]);
+    this._actionProcessor = new ActionProcessor();
     
-    // Initialize Systems Pipeline
     this._systems = [
-      new GrowthSystem(),   // 1. Process Growth/Economy
-      new AiSystem(),       // 2. Bot Decisions
-      new MovementSystem(), // 3. Execute Movement
-      new VictorySystem()   // 4. Check Rules
+      new GrowthSystem(),
+      new AiSystem(this._actionProcessor),
+      new MovementSystem(),
+      new VictorySystem()
     ];
   }
 
-  public get state(): GameState {
+  public get state(): SessionState {
     return this._state;
-  }
-
-  public get index(): WorldIndex {
-      return this._index;
   }
 
   /**
    * Sync Player Intent (Growth/Upgrade Mode) from UI
    */
   public setPlayerIntent(isGrowing: boolean, intent: 'RECOVER' | 'UPGRADE' | null) {
+      if (!this._state) return;
+      // This is a direct, simple state change not requiring full transactional logic
       this._state.isPlayerGrowing = isGrowing;
       this._state.playerGrowthIntent = intent;
-      // Increment version to ensure UI reflects this change immediately if needed
       this._state.stateVersion++;
   }
 
   /**
    * External Action Entry Point (UI)
-   * Delegates to ActionProcessor
+   * Creates a temporary state copy, applies the action, and commits it on success.
    */
-  public applyAction(actorId: string, action: BotAction): ValidationResult {
-    const result = ActionProcessor.applyAction(this._state, this._index, actorId, action);
+  public applyAction(actorId: string, action: GameAction): ValidationResult {
+    if (!this._state) return { ok: false, reason: "Engine Destroyed" };
+
+    const nextState = JSON.parse(JSON.stringify(this._state));
+    const result = this._actionProcessor.applyAction(nextState, this._index, actorId, action);
     
     if (result.ok) {
-        // Increment state version on successful external action
-        this._state.stateVersion++;
-        
-        // Log denial if needed (handled by UI toast usually, but we can log to bot log for debugging)
-        if (actorId !== this._state.player.id) {
-           this._state.botActivityLog.unshift({
-               botId: actorId, action: action.type, reason: "Manual Override", timestamp: Date.now()
-           });
-        }
-    } else {
-         this._state.botActivityLog.unshift({
-            botId: actorId, action: action.type, reason: `DENIED: ${result.reason}`, timestamp: Date.now()
-        });
+        nextState.stateVersion++;
+        this._state = nextState;
     }
 
     return result;
@@ -84,21 +76,34 @@ export class GameEngine {
   
   /**
    * Main Simulation Loop
+   * Creates a temporary state copy, runs all systems on it, and then commits it.
    */
   public processTick(): TickResult {
+    if (!this._state) return { state: {} as any, events: [] };
+
+    const nextState = JSON.parse(JSON.stringify(this._state));
     const tickEvents: GameEvent[] = [];
 
-    // Run Systems
     for (const system of this._systems) {
-        system.update(this._state, this._index, tickEvents);
+        system.update(nextState, this._index, tickEvents);
     }
 
-    // Increment version for cycle consistency
-    this._state.stateVersion++;
+    nextState.stateVersion++;
+    this._state = nextState;
 
     return {
         state: this._state,
         events: tickEvents
     };
+  }
+
+  /**
+   * Hard Reset / Cleanup
+   */
+  public destroy() {
+    this._systems = [];
+    this._index = null as any;
+    this._state = null as any;
+    this._actionProcessor = null as any;
   }
 }

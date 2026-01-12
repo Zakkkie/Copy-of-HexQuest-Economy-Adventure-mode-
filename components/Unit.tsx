@@ -90,7 +90,7 @@ const CoinPopup: React.FC<{ amount: number; y: number }> = ({ amount, y }) => {
   );
 };
 
-const Unit: React.FC<UnitProps> = ({ q, r, type, color, rotation, hexLevel, totalCoinsEarned }) => {
+const Unit: React.FC<UnitProps> = React.memo(({ q, r, type, color, rotation, hexLevel, totalCoinsEarned }) => {
   const groupRef = useRef<Konva.Group>(null); // Handles X, Y (Base Position)
   const elevationGroupRef = useRef<Konva.Group>(null); // Handles Z (Height Offset)
   const posTweenRef = useRef<Konva.Tween | null>(null);
@@ -245,6 +245,6 @@ const Unit: React.FC<UnitProps> = ({ q, r, type, color, rotation, hexLevel, tota
       </Group>
     </Group>
   );
-};
+});
 
 export default Unit;
