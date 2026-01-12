@@ -159,7 +159,7 @@ export interface SessionState {
   player: Entity;
   bots: Entity[]; 
   currentTurn: number;
-  gameStatus: 'PLAYING' | 'GAME_OVER' | 'VICTORY' | 'DEFEAT';
+  gameStatus: 'PLAYING' | 'VICTORY' | 'DEFEAT';
   messageLog: string[];
   botActivityLog: BotLogEntry[];
   lastBotActionTime: number; 

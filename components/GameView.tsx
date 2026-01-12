@@ -74,7 +74,7 @@ const GameView: React.FC = () => {
   // Auto-scroll log panels
   useEffect(() => {
     if (logsContainerRef.current && activeTab === 'LOGS') {
-        logsContainerRef.current.scrollTop = logsContainerRef.current.scrollHeight; 
+        logsContainerRef.current.scrollTop = 0; 
     }
     if (botLogsContainerRef.current && activeTab === 'BOTS') {
         botLogsContainerRef.current.scrollTop = 0;
@@ -580,7 +580,7 @@ const GameView: React.FC = () => {
           {/* Content */}
           <div className="flex-1 overflow-y-auto no-scrollbar bg-black/40 p-2 min-h-[150px]">
               {activeTab === 'LOGS' && (
-                  <div ref={logsContainerRef} className="flex flex-col-reverse gap-1.5">
+                  <div ref={logsContainerRef} className="flex flex-col gap-1.5">
                      {messageLog.map((msg, idx) => (
                         <div key={`${msg}-${idx}`} className="bg-slate-800/50 border-l-2 border-cyan-500/50 px-2 py-1.5 text-[10px] font-mono text-cyan-100/90 rounded-r-md">
                           {msg}
