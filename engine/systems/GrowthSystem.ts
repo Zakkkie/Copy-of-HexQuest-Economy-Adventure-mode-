@@ -3,6 +3,7 @@
 
 
 
+
 import { System } from './System';
 import { GameState, GameEvent, EntityState, Entity, EntityType, SessionState } from '../../types';
 import { WorldIndex } from '../WorldIndex';
@@ -133,6 +134,10 @@ export class GrowthSystem implements System {
              state.messageLog.unshift(msg);
              if (state.messageLog.length > 100) state.messageLog.pop();
              events.push(GameEventFactory.create('LEVEL_UP', msg, entity.id));
+
+             // CONSUME CYCLE POINTS
+             // Upgrading a high-level sector consumes the accumulated momentum/history
+             entity.recentUpgrades = [];
         }
       }
 

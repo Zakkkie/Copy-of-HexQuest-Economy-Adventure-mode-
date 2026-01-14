@@ -26,6 +26,7 @@ export class GameEngine {
   private _actionProcessor: ActionProcessor;
 
   constructor(initialState: SessionState) {
+    // Initial deep copy is acceptable for setup
     this._state = JSON.parse(JSON.stringify(initialState));
     this._state.stateVersion = this._state.stateVersion || 0;
     
@@ -45,11 +46,45 @@ export class GameEngine {
   }
 
   /**
+   * Optimized State Cloning
+   * Replaces JSON.parse(JSON.stringify) with structural shallow copying.
+   * This reduces GC pressure and CPU time by O(N) where N is state size.
+   */
+  private cloneState(source: SessionState): SessionState {
+    return {
+      ...source,
+      // 1. Shallow copy the Grid container. 
+      // Individual Hex objects must be treated as immutable by systems (use spread to update).
+      grid: { ...source.grid }, 
+      
+      // 2. Clone Entities (Player & Bots)
+      player: {
+        ...source.player,
+        movementQueue: [...source.player.movementQueue],
+        recentUpgrades: [...source.player.recentUpgrades],
+        memory: source.player.memory ? { ...source.player.memory } : undefined
+      },
+      bots: source.bots.map(b => ({
+        ...b,
+        movementQueue: [...b.movementQueue],
+        recentUpgrades: [...b.recentUpgrades],
+        memory: b.memory ? { ...b.memory } : undefined
+      })),
+
+      // 3. Clone Arrays
+      messageLog: [...source.messageLog],
+      botActivityLog: [...source.botActivityLog],
+      growingBotIds: [...source.growingBotIds],
+      telemetry: source.telemetry ? [...source.telemetry] : undefined
+    };
+  }
+
+  /**
    * Sync Player Intent (Growth/Upgrade Mode) from UI
    */
   public setPlayerIntent(isGrowing: boolean, intent: 'RECOVER' | 'UPGRADE' | null) {
       if (!this._state) return;
-      const nextState = JSON.parse(JSON.stringify(this._state));
+      const nextState = this.cloneState(this._state);
       nextState.isPlayerGrowing = isGrowing;
       nextState.playerGrowthIntent = intent;
       nextState.stateVersion++;
@@ -63,7 +98,7 @@ export class GameEngine {
   public applyAction(actorId: string, action: GameAction): ValidationResult {
     if (!this._state) return { ok: false, reason: "Engine Destroyed" };
 
-    const nextState = JSON.parse(JSON.stringify(this._state));
+    const nextState = this.cloneState(this._state);
     const result = this._actionProcessor.applyAction(nextState, this._index, actorId, action);
     
     if (result.ok) {
@@ -81,7 +116,7 @@ export class GameEngine {
   public processTick(): TickResult {
     if (!this._state) return { state: {} as any, events: [] };
 
-    const nextState = JSON.parse(JSON.stringify(this._state));
+    const nextState = this.cloneState(this._state);
     const tickEvents: GameEvent[] = [];
 
     for (const system of this._systems) {

@@ -1,5 +1,4 @@
 
-
 import { Hex, HexCoord } from '../types';
 import { GAME_CONFIG, getLevelConfig, SAFETY_CONFIG } from '../rules/config';
 
@@ -37,101 +36,175 @@ export const getSecondsToGrow = (level: number) => getLevelConfig(level).growthT
 
 export { checkGrowthCondition } from '../rules/growth';
 
-// A* Pathfinding (Optimized & Protected)
-export const findPath = (start: HexCoord, end: HexCoord, grid: Record<string, Hex>, rank: number, obstacles: HexCoord[]): HexCoord[] | null => {
+/**
+ * Min-Heap Priority Queue implementation for O(log n) retrievals
+ */
+class PriorityQueue<T> {
+  private _heap: { node: T; weight: number }[] = [];
+
+  get length(): number {
+    return this._heap.length;
+  }
+
+  push(node: T, weight: number): void {
+    this._heap.push({ node, weight });
+    this._bubbleUp();
+  }
+
+  pop(): T | undefined {
+    if (this.length === 0) return undefined;
+    const top = this._heap[0];
+    const bottom = this._heap.pop();
+    if (this._heap.length > 0 && bottom) {
+      this._heap[0] = bottom;
+      this._sinkDown();
+    }
+    return top.node;
+  }
+
+  private _bubbleUp(): void {
+    let index = this._heap.length - 1;
+    const element = this._heap[index];
+    while (index > 0) {
+      const parentIndex = Math.floor((index - 1) / 2);
+      const parent = this._heap[parentIndex];
+      if (element.weight >= parent.weight) break;
+      this._heap[parentIndex] = element;
+      this._heap[index] = parent;
+      index = parentIndex;
+    }
+  }
+
+  private _sinkDown(): void {
+    let index = 0;
+    const length = this._heap.length;
+    const element = this._heap[0];
+    while (true) {
+      const leftChildIdx = 2 * index + 1;
+      const rightChildIdx = 2 * index + 2;
+      let leftChild, rightChild;
+      let swap = null;
+
+      if (leftChildIdx < length) {
+        leftChild = this._heap[leftChildIdx];
+        if (leftChild.weight < element.weight) {
+          swap = leftChildIdx;
+        }
+      }
+
+      if (rightChildIdx < length) {
+        rightChild = this._heap[rightChildIdx];
+        if (
+          (swap === null && rightChild.weight < element.weight) ||
+          (swap !== null && leftChild && rightChild.weight < leftChild.weight)
+        ) {
+          swap = rightChildIdx;
+        }
+      }
+
+      if (swap === null) break;
+      this._heap[index] = this._heap[swap];
+      this._heap[swap] = element;
+      index = swap;
+    }
+  }
+}
+
+/**
+ * Optimized A* Pathfinding using Min-Heap
+ */
+export const findPath = (
+  start: HexCoord, 
+  end: HexCoord, 
+  grid: Record<string, Hex>, 
+  rank: number, 
+  obstacles: HexCoord[]
+): HexCoord[] | null => {
   const startKey = getHexKey(start.q, start.r);
   const endKey = getHexKey(end.q, end.r);
+  
+  // 1. Immediate checks
   if (startKey === endKey) return [];
   
-  // Quick pre-check for distance to avoid running A* on impossible long paths
+  // Quick pre-check distance to avoid searching impossible paths
   if (cubeDistance(start, end) > SAFETY_CONFIG.MAX_PATH_LENGTH) return null;
 
-  // O(1) Lookup
+  // O(1) Obstacle Lookup
   const obsKeys = new Set(obstacles.map(o => getHexKey(o.q, o.r)));
   if (obsKeys.has(endKey)) return null;
 
-  // G-Score: Cost from start
+  // 2. Setup Data Structures
+  const openSet = new PriorityQueue<string>();
+  const cameFrom = new Map<string, HexCoord>();
   const gScore = new Map<string, number>();
+
+  // Initialize
   gScore.set(startKey, 0);
+  openSet.push(startKey, cubeDistance(start, end));
 
-  // F-Score: Cost from start + Heuristic to end
-  const fScore = new Map<string, number>();
-  fScore.set(startKey, cubeDistance(start, end));
+  let iterations = 0;
 
-  const prev: Record<string, HexCoord | null> = { [startKey]: null };
-  // openSet is used as a Priority Queue
-  const openSet: { k: string, f: number }[] = [{ k: startKey, f: fScore.get(startKey)! }];
-  const closedSet = new Set<string>();
-
-  let iter = 0;
+  // 3. Main Loop
   while (openSet.length > 0) {
-    // Safety guard: Processor Protection
-    if (iter++ > SAFETY_CONFIG.MAX_SEARCH_ITERATIONS) return null; 
+    // Safety Break
+    if (iterations++ > SAFETY_CONFIG.MAX_SEARCH_ITERATIONS) return null;
+
+    const currentKey = openSet.pop()!;
     
-    // --- PERFORMANCE OPTIMIZATION ---
-    // Linear scan O(n) for lowest F is faster than sorting for small sets
-    let lowestIndex = 0;
-    for (let i = 1; i < openSet.length; i++) {
-        if (openSet[i].f < openSet[lowestIndex].f) {
-            lowestIndex = i;
-        }
-    }
-    const current = openSet.splice(lowestIndex, 1)[0];
-    const currentKey = current.k;
-    
-    // Safety guard: Max path length during exploration
+    // Safety: Path length check during exploration
     if ((gScore.get(currentKey) || 0) > SAFETY_CONFIG.MAX_PATH_LENGTH) continue;
 
     if (currentKey === endKey) {
-        // Reconstruct Path by backtracking
-        const path: HexCoord[] = [];
-        let curr: HexCoord | null = end;
-        while (curr && getHexKey(curr.q, curr.r) !== startKey) {
-            path.unshift(curr);
-            const pKey = getHexKey(curr.q, curr.r);
-            curr = prev[pKey];
-        }
-        return path;
+      // Reconstruct Path
+      const path: HexCoord[] = [];
+      let currKey = endKey;
+      while (currKey !== startKey) {
+        const coords = getCoordinatesFromKey(currKey);
+        path.unshift(coords);
+        const parent = cameFrom.get(currKey);
+        if (!parent) break; // Should not happen if path exists
+        currKey = getHexKey(parent.q, parent.r);
+      }
+      return path;
     }
 
-    closedSet.add(currentKey);
-    const currC = getCoordinatesFromKey(currentKey);
-    const currHex = grid[currentKey];
-    const currL = currHex ? currHex.maxLevel : 0;
+    const currentCoord = getCoordinatesFromKey(currentKey);
+    const currentHex = grid[currentKey];
+    const currentLevel = currentHex ? currentHex.maxLevel : 0;
+    
+    // Evaluate Neighbors
+    const neighbors = getNeighbors(currentCoord.q, currentCoord.r);
+    
+    for (const neighbor of neighbors) {
+      const nKey = getHexKey(neighbor.q, neighbor.r);
+      
+      if (obsKeys.has(nKey)) continue;
 
-    for (const n of getNeighbors(currC.q, currC.r)) {
-        const nKey = getHexKey(n.q, n.r);
-        if (closedSet.has(nKey)) continue;
-        if (obsKeys.has(nKey)) continue;
+      const neighborHex = grid[nKey];
+      
+      // -- Game Rules --
+      // 1. Rank Check: Cannot enter hex higher than player rank
+      if (neighborHex && neighborHex.maxLevel > rank) continue; 
+      
+      // 2. Height/Jump Check: Cannot jump more than 1 level difference
+      const nextLevel = neighborHex ? neighborHex.maxLevel : 0;
+      if (Math.abs(currentLevel - nextLevel) > 1) continue;
 
-        const neighborHex = grid[nKey];
+      // -- Cost Calculation --
+      // Base cost 1. Rough terrain (L2+) costs more.
+      const moveCost = (neighborHex && neighborHex.maxLevel >= 2) ? neighborHex.maxLevel : 1;
+      const tentativeG = (gScore.get(currentKey) ?? Infinity) + moveCost;
+
+      if (tentativeG < (gScore.get(nKey) ?? Infinity)) {
+        cameFrom.set(nKey, currentCoord);
+        gScore.set(nKey, tentativeG);
         
-        // Rules Check
-        if (neighborHex && neighborHex.maxLevel > rank) continue; // Rank limit
-        const nextL = neighborHex ? neighborHex.maxLevel : 0;
-        if (Math.abs(currL - nextL) > 1) continue; // Height limit (Jump 1)
-
-        // Cost Calculation
-        // Base cost 1, rough terrain (L2+) costs more (Game Rule)
-        const moveCost = (neighborHex && neighborHex.maxLevel >= 2) ? neighborHex.maxLevel : 1;
-        const tentativeG = gScore.get(currentKey)! + moveCost;
-
-        if (tentativeG < (gScore.get(nKey) ?? Infinity)) {
-            prev[nKey] = currC;
-            gScore.set(nKey, tentativeG);
-            const f = tentativeG + cubeDistance(n, end); // Heuristic
-            fScore.set(nKey, f);
-            
-            if (!openSet.some(x => x.k === nKey)) {
-                openSet.push({ k: nKey, f });
-            } else {
-                // Update priority
-                const item = openSet.find(x => x.k === nKey);
-                if (item) item.f = f;
-            }
-        }
+        const fScore = tentativeG + cubeDistance(neighbor, end);
+        openSet.push(nKey, fScore);
+      }
     }
   }
-  // No path was found
+
+  // No path found
   return null;
 };

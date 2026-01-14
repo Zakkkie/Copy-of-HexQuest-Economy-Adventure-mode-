@@ -24,12 +24,39 @@ type RenderItem =
   | { type: 'CONN'; id: string; depth: number; points: number[]; color: string; dash: number[]; opacity: number };
 
 const GameView: React.FC = () => {
-  // --- STATE SELECTION ---
-  const session = useGameStore(state => state.session);
-  const { user, toast, pendingConfirmation, setUIState, hideToast, showToast, abandonSession, tick, movePlayer, togglePlayerGrowth, confirmPendingAction, cancelPendingAction } = useGameStore();
+  // --- STATE SELECTION (Optimized Selectors) ---
+  // We subscribe to specific parts of the session to avoid re-rendering if 
+  // unrelated parts of the store (like leaderboard) change.
+  const grid = useGameStore(state => state.session?.grid);
+  const player = useGameStore(state => state.session?.player);
+  const bots = useGameStore(state => state.session?.bots);
+  const winCondition = useGameStore(state => state.session?.winCondition);
+  const gameStatus = useGameStore(state => state.session?.gameStatus);
+  const messageLog = useGameStore(state => state.session?.messageLog);
+  const botActivityLog = useGameStore(state => state.session?.botActivityLog);
+  const isPlayerGrowing = useGameStore(state => state.session?.isPlayerGrowing);
+  const playerGrowthIntent = useGameStore(state => state.session?.playerGrowthIntent);
+  const sessionStartTime = useGameStore(state => state.session?.sessionStartTime);
+  const difficulty = useGameStore(state => state.session?.difficulty);
 
-  if (!session) return null;
-  const { grid, player, bots, winCondition, gameStatus, messageLog, botActivityLog, isPlayerGrowing, playerGrowthIntent, sessionStartTime, difficulty } = session;
+  // Global UI State
+  const user = useGameStore(state => state.user);
+  const toast = useGameStore(state => state.toast);
+  const pendingConfirmation = useGameStore(state => state.pendingConfirmation);
+
+  // Actions
+  const setUIState = useGameStore(state => state.setUIState);
+  const hideToast = useGameStore(state => state.hideToast);
+  const showToast = useGameStore(state => state.showToast);
+  const abandonSession = useGameStore(state => state.abandonSession);
+  const tick = useGameStore(state => state.tick);
+  const movePlayer = useGameStore(state => state.movePlayer);
+  const togglePlayerGrowth = useGameStore(state => state.togglePlayerGrowth);
+  const confirmPendingAction = useGameStore(state => state.confirmPendingAction);
+  const cancelPendingAction = useGameStore(state => state.cancelPendingAction);
+
+  // Safety check: if session is initializing or ended, these might be null
+  if (!grid || !player || !bots || !difficulty) return null;
   
   const queueSize = DIFFICULTY_SETTINGS[difficulty]?.queueSize || 3;
 

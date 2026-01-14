@@ -1,10 +1,11 @@
-
 import React from 'react';
 import { useGameStore } from '../store.ts';
 import { Trophy, Coins, Layers, ArrowLeft, User, Zap, Shield, Ghost, Bot } from 'lucide-react';
 
 const Leaderboard: React.FC = () => {
-  const { leaderboard, user, setUIState } = useGameStore();
+  const leaderboard = useGameStore(state => state.leaderboard);
+  const user = useGameStore(state => state.user);
+  const setUIState = useGameStore(state => state.setUIState);
 
   const getIconComponent = (id: string) => {
     switch(id) {

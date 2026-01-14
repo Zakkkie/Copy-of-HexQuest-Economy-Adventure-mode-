@@ -1,6 +1,6 @@
-
 import { Hex, Entity, HexCoord } from '../types';
 import { getHexKey, getNeighbors, cubeDistance } from '../services/hexUtils';
+import { SAFETY_CONFIG } from '../rules/config';
 
 /**
  * WorldIndex optimizes queries that otherwise require iterating over the entire grid.
@@ -136,7 +136,12 @@ export class WorldIndex {
       if (this.grid[startKey]) results.push(this.grid[startKey]);
 
       let head = 0;
+      let iterations = 0;
+      
       while(head < queue.length) {
+          // SAFETY BREAK: Prevent infinite expansion if graph is malformed or range is huge
+          if (iterations++ > SAFETY_CONFIG.MAX_SEARCH_ITERATIONS) break;
+
           const { q, r, dist } = queue[head++];
           if (dist >= range) continue;
 

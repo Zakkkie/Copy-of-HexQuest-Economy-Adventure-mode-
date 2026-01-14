@@ -1,7 +1,3 @@
-
-
-
-
 // Game Configuration and Constants
 
 export const GAME_CONFIG = {
@@ -41,7 +37,7 @@ export const DIFFICULTY_SETTINGS = {
 export const SAFETY_CONFIG = {
   MAX_LOG_SIZE: 50,             // Keep state small for fast cloning/rendering
   MAX_PATH_LENGTH: 20,          // Prevent cross-map path calculations
-  MAX_SEARCH_ITERATIONS: 1000,  // Prevent A* from freezing the thread
+  MAX_SEARCH_ITERATIONS: 3000,  // Prevent A* from freezing the thread
   MAX_MOVEMENT_QUEUE: 25        // Prevent infinite move loops
 };
 

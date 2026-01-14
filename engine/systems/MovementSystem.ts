@@ -1,5 +1,3 @@
-
-
 import { System } from './System';
 import { GameState, GameEvent, EntityState, Entity, SessionState } from '../../types';
 import { WorldIndex } from '../WorldIndex';
@@ -80,7 +78,9 @@ export class MovementSystem implements System {
           revealed: true 
         };
       } else {
-        state.grid[k].revealed = true;
+        // IMMUTABLE UPDATE: Create new hex object instead of mutating existing one
+        // This is critical for the new GameEngine.cloneState() optimization.
+        state.grid[k] = { ...state.grid[k], revealed: true };
       }
     });
   }

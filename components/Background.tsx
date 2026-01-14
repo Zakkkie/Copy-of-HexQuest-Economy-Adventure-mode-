@@ -1,4 +1,3 @@
-
 import React, { useRef, useEffect } from 'react';
 
 interface BackgroundProps {
@@ -20,6 +19,13 @@ const Background: React.FC<BackgroundProps> = ({ variant = 'MENU' }) => {
 
     let animationFrameId: number;
     let time = 0;
+
+    // OPTIMIZATION: Throttle FPS to save CPU
+    // Menu: 30 FPS (Smooth enough for ambience)
+    // Game: 15 FPS (Background is subtle/obscured, high FPS is wasteful)
+    const TARGET_FPS = variant === 'MENU' ? 30 : 15;
+    const FRAME_INTERVAL = 1000 / TARGET_FPS;
+    let lastFrameTime = 0;
 
     const handleResize = () => {
       if (canvas) {
@@ -70,8 +76,19 @@ const Background: React.FC<BackgroundProps> = ({ variant = 'MENU' }) => {
       ctx.stroke();
     };
 
-    const render = () => {
-      time += 0.005;
+    const render = (timestamp: number) => {
+      animationFrameId = requestAnimationFrame(render);
+      
+      // Throttle Check
+      const elapsed = timestamp - lastFrameTime;
+      if (elapsed < FRAME_INTERVAL) return;
+
+      // Adjust lastFrameTime to target interval (avoids drift)
+      lastFrameTime = timestamp - (elapsed % FRAME_INTERVAL);
+      
+      // Normalize time increment based on actual elapsed time (approx 0.0003 per ms)
+      // This ensures animation speed is consistent regardless of FPS limit
+      time += 0.0003 * elapsed;
       
       // Base Background Color
       ctx.fillStyle = '#020617'; 
@@ -112,11 +129,9 @@ const Background: React.FC<BackgroundProps> = ({ variant = 'MENU' }) => {
            drawHex(cx, cy, HEX_SIZE, color, height, stroke);
         }
       }
-
-      animationFrameId = requestAnimationFrame(render);
     };
 
-    render();
+    animationFrameId = requestAnimationFrame(render);
 
     return () => {
       window.removeEventListener('resize', handleResize);
