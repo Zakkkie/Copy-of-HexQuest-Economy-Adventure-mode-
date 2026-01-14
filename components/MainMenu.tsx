@@ -1,8 +1,10 @@
 
+
+
 import React, { useState } from 'react';
 import { useGameStore } from '../store.ts';
-import { Trophy, LogOut, User, Ghost, Play, ArrowRight, Zap, Shield, UserCircle, X, LogIn, Lock, Target, Gem, Crown, Bot } from 'lucide-react';
-import { WinCondition, WinType } from '../types.ts';
+import { Trophy, LogOut, Ghost, Play, ArrowRight, Zap, Shield, UserCircle, X, LogIn, Lock, Target, Gem, Crown, Bot, Skull, Activity, Signal } from 'lucide-react';
+import { WinCondition, Difficulty } from '../types.ts';
 
 const AVATAR_COLORS = [
   '#ef4444', // Red
@@ -16,7 +18,7 @@ const AVATAR_COLORS = [
 ];
 
 const AVATAR_ICONS = [
-  { id: 'user', icon: User },
+  { id: 'user', icon: UserCircle },
   { id: 'zap', icon: Zap },
   { id: 'shield', icon: Shield },
   { id: 'ghost', icon: Ghost },
@@ -46,9 +48,15 @@ const MainMenu: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Mission Config State
-  const [selectedWinType, setSelectedWinType] = useState<WinType>('WEALTH');
-  const [selectedTarget, setSelectedTarget] = useState<number>(100);
+  const [selectedTier, setSelectedTier] = useState<1 | 2 | 3>(1);
+  const [difficulty, setDifficulty] = useState<Difficulty>('MEDIUM');
   const [botCount, setBotCount] = useState<number>(1);
+
+  const MISSION_TIERS = {
+    1: { level: 5, coins: 250, label: 'Sector Patrol' },
+    2: { level: 7, coins: 500, label: 'Regional Command' },
+    3: { level: 10, coins: 1000, label: 'Global Domination' }
+  };
 
   const resetForm = () => {
     setInputName('');
@@ -67,13 +75,13 @@ const MainMenu: React.FC = () => {
   };
 
   const confirmMissionStart = () => {
+    const tier = MISSION_TIERS[selectedTier];
     const winCondition: WinCondition = {
-      type: selectedWinType,
-      target: selectedTarget,
+      targetLevel: tier.level,
+      targetCoins: tier.coins,
       botCount: botCount,
-      label: selectedWinType === 'WEALTH' 
-        ? `Accumulate ${selectedTarget} Coins` 
-        : `Reach Level ${selectedTarget}`
+      difficulty: difficulty,
+      label: `${tier.label} (L${tier.level} + ${tier.coins}c)`
     };
     startNewGame(winCondition);
     setShowMissionConfig(false);
@@ -128,7 +136,7 @@ const MainMenu: React.FC = () => {
   };
 
   const renderAvatar = (color: string, iconId: string, size = 'md') => {
-    const IconComponent = AVATAR_ICONS.find(i => i.id === iconId)?.icon || User;
+    const IconComponent = AVATAR_ICONS.find(i => i.id === iconId)?.icon || UserCircle;
     const dims = size === 'lg' ? 'w-16 h-16' : 'w-8 h-8';
     const iconSize = size === 'lg' ? 'w-8 h-8' : 'w-4 h-4';
     
@@ -188,7 +196,7 @@ const MainMenu: React.FC = () => {
       <div className="flex flex-col gap-6 w-96 z-10">
         
         {/* Title */}
-        <div className="text-center mb-6"> {/* Reduced from mb-8 */}
+        <div className="text-center mb-6"> 
           <h1 className="text-6xl font-black text-transparent bg-clip-text bg-gradient-to-br from-amber-400 to-amber-600 italic tracking-tighter drop-shadow-[0_0_25px_rgba(245,158,11,0.4)]">
             HexQuest
           </h1>
@@ -359,72 +367,84 @@ const MainMenu: React.FC = () => {
       {/* MISSION CONFIG MODAL */}
       {showMissionConfig && (
         <div className="absolute inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-700 p-8 rounded-3xl shadow-2xl w-[500px] relative overflow-hidden">
+          <div className="bg-slate-900 border border-slate-700 p-8 rounded-3xl shadow-2xl w-[550px] relative overflow-hidden flex flex-col gap-6">
              {/* Decorative header line */}
              <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-amber-500 via-indigo-500 to-amber-500"></div>
 
-             <h2 className="text-3xl font-black text-white mb-2 uppercase tracking-tight flex items-center gap-3">
-               <Target className="w-8 h-8 text-amber-500" /> Mission Config
-             </h2>
-             <p className="text-slate-500 font-mono text-xs uppercase tracking-widest mb-8">Select Victory Parameters</p>
-
-             <div className="grid grid-cols-2 gap-4 mb-6">
-                <button 
-                  onClick={() => { setSelectedWinType('WEALTH'); setSelectedTarget(100); }}
-                  className={`p-4 rounded-2xl border-2 flex flex-col items-center gap-3 transition-all ${selectedWinType === 'WEALTH' ? 'bg-amber-500/10 border-amber-500' : 'bg-slate-950 border-slate-800 opacity-50 hover:opacity-100'}`}
-                >
-                   <Gem className={`w-8 h-8 ${selectedWinType === 'WEALTH' ? 'text-amber-500' : 'text-slate-500'}`} />
-                   <span className="font-bold text-sm uppercase">Wealth</span>
-                </button>
-                <button 
-                  onClick={() => { setSelectedWinType('DOMINATION'); setSelectedTarget(5); }}
-                  className={`p-4 rounded-2xl border-2 flex flex-col items-center gap-3 transition-all ${selectedWinType === 'DOMINATION' ? 'bg-indigo-500/10 border-indigo-500' : 'bg-slate-950 border-slate-800 opacity-50 hover:opacity-100'}`}
-                >
-                   <Crown className={`w-8 h-8 ${selectedWinType === 'DOMINATION' ? 'text-indigo-500' : 'text-slate-500'}`} />
-                   <span className="font-bold text-sm uppercase">Domination</span>
-                </button>
+             <div className="text-center">
+                <h2 className="text-3xl font-black text-white mb-1 uppercase tracking-tight flex items-center justify-center gap-3">
+                  <Target className="w-8 h-8 text-amber-500" /> Mission Config
+                </h2>
+                <p className="text-slate-500 font-mono text-xs uppercase tracking-widest">Select Operational Parameters</p>
              </div>
 
-             <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 mb-6">
-               <label className="text-[10px] uppercase font-bold text-slate-500 tracking-wider mb-4 block text-center">
-                 {selectedWinType === 'WEALTH' ? 'Target Accumulation (Credits)' : 'Target Rank (Level)'}
+             {/* DIFFICULTY SELECTOR */}
+             <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
+               <label className="text-[10px] uppercase font-bold text-slate-500 tracking-wider mb-3 block text-center flex items-center justify-center gap-2">
+                 <Signal className="w-3 h-3"/> Difficulty (Cycle Requirement)
                </label>
-               <div className="flex justify-between gap-2">
-                 {selectedWinType === 'WEALTH' ? (
-                   [100, 500, 1000].map(val => (
-                     <button 
-                      key={val}
-                      onClick={() => setSelectedTarget(val)}
-                      className={`flex-1 py-3 rounded-xl font-mono font-bold border transition-all ${selectedTarget === val ? 'bg-amber-500 text-slate-900 border-amber-500' : 'bg-slate-900 text-slate-400 border-slate-800 hover:border-slate-600'}`}
-                     >
-                       {val}
-                     </button>
-                   ))
-                 ) : (
-                   [5, 7, 10].map(val => (
-                     <button 
-                      key={val}
-                      onClick={() => setSelectedTarget(val)}
-                      className={`flex-1 py-3 rounded-xl font-mono font-bold border transition-all ${selectedTarget === val ? 'bg-indigo-500 text-white border-indigo-500' : 'bg-slate-900 text-slate-400 border-slate-800 hover:border-slate-600'}`}
-                     >
-                       L{val}
-                     </button>
-                   ))
-                 )}
+               <div className="flex gap-2">
+                   <button 
+                     onClick={() => setDifficulty('EASY')}
+                     className={`flex-1 py-3 px-2 rounded-xl border flex flex-col items-center gap-1 transition-all ${difficulty === 'EASY' ? 'bg-emerald-900/30 border-emerald-500 text-emerald-100' : 'bg-slate-900 border-slate-800 text-slate-500 hover:border-slate-600'}`}
+                   >
+                      <span className="font-bold text-xs uppercase">Cadet</span>
+                      <span className="text-[9px] opacity-70">1 Upgrade Point</span>
+                   </button>
+                   <button 
+                     onClick={() => setDifficulty('MEDIUM')}
+                     className={`flex-1 py-3 px-2 rounded-xl border flex flex-col items-center gap-1 transition-all ${difficulty === 'MEDIUM' ? 'bg-amber-900/30 border-amber-500 text-amber-100' : 'bg-slate-900 border-slate-800 text-slate-500 hover:border-slate-600'}`}
+                   >
+                      <span className="font-bold text-xs uppercase">Veteran</span>
+                      <span className="text-[9px] opacity-70">2 Upgrade Points</span>
+                   </button>
+                   <button 
+                     onClick={() => setDifficulty('HARD')}
+                     className={`flex-1 py-3 px-2 rounded-xl border flex flex-col items-center gap-1 transition-all ${difficulty === 'HARD' ? 'bg-red-900/30 border-red-500 text-red-100' : 'bg-slate-900 border-slate-800 text-slate-500 hover:border-slate-600'}`}
+                   >
+                      <span className="font-bold text-xs uppercase">Elite</span>
+                      <span className="text-[9px] opacity-70">3 Upgrade Points</span>
+                   </button>
                </div>
              </div>
 
-             {/* BOT COUNT SELECTOR */}
-             <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 mb-8">
-               <label className="text-[10px] uppercase font-bold text-slate-500 tracking-wider mb-4 block text-center flex items-center justify-center gap-2">
-                 <Bot className="w-3 h-3"/> Threat Level (Bots)
+             {/* TIER SELECTOR */}
+             <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
+               <label className="text-[10px] uppercase font-bold text-slate-500 tracking-wider mb-3 block text-center flex items-center justify-center gap-2">
+                 <Gem className="w-3 h-3"/> Objective Tier (Level + Coins)
+               </label>
+               <div className="flex flex-col gap-2">
+                   {[1, 2, 3].map((t) => {
+                     const tier = MISSION_TIERS[t as 1|2|3];
+                     return (
+                       <button 
+                        key={t}
+                        onClick={() => setSelectedTier(t as 1|2|3)}
+                        className={`w-full py-3 px-4 rounded-xl flex items-center justify-between border transition-all ${selectedTier === t ? 'bg-indigo-900/30 border-indigo-500 text-indigo-100' : 'bg-slate-900 border-slate-800 text-slate-500 hover:border-slate-600'}`}
+                       >
+                         <span className="font-bold text-xs uppercase">{tier.label}</span>
+                         <div className="flex items-center gap-3 text-xs font-mono">
+                            <span className="flex items-center gap-1"><Crown className="w-3 h-3" /> L{tier.level}</span>
+                            <span className="text-slate-600">+</span>
+                            <span className="flex items-center gap-1"><Gem className="w-3 h-3" /> {tier.coins}</span>
+                         </div>
+                       </button>
+                     )
+                   })}
+               </div>
+             </div>
+
+             {/* BOT COUNT */}
+             <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
+               <label className="text-[10px] uppercase font-bold text-slate-500 tracking-wider mb-3 block text-center flex items-center justify-center gap-2">
+                 <Bot className="w-3 h-3"/> Threat Density (Bots)
                </label>
                <div className="flex justify-between gap-2">
                    {[1, 2, 3].map(val => (
                      <button 
                       key={val}
                       onClick={() => setBotCount(val)}
-                      className={`flex-1 py-3 rounded-xl font-mono font-bold border transition-all ${botCount === val ? 'bg-red-500 text-white border-red-500' : 'bg-slate-900 text-slate-400 border-slate-800 hover:border-slate-600'}`}
+                      className={`flex-1 py-2 rounded-xl font-mono font-bold border transition-all ${botCount === val ? 'bg-slate-800 text-white border-slate-600' : 'bg-slate-900 text-slate-500 border-slate-800 hover:border-slate-700'}`}
                      >
                        {val}
                      </button>
@@ -432,7 +452,7 @@ const MainMenu: React.FC = () => {
                </div>
              </div>
 
-             <div className="flex gap-4">
+             <div className="flex gap-4 mt-2">
                <button 
                  onClick={() => setShowMissionConfig(false)}
                  className="flex-1 py-4 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl transition-colors uppercase text-xs tracking-wider"
@@ -443,7 +463,7 @@ const MainMenu: React.FC = () => {
                  onClick={confirmMissionStart}
                  className="flex-1 py-4 bg-white hover:bg-slate-200 text-slate-900 font-bold rounded-xl shadow-lg transition-colors uppercase text-xs tracking-wider"
                >
-                 Initialize
+                 Initialize Mission
                </button>
              </div>
 

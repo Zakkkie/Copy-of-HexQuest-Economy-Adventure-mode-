@@ -1,6 +1,4 @@
-
-
-import { GameState, GameAction, GameEvent, ValidationResult, SessionState } from '../types';
+import { GameState, GameAction, GameEvent, ValidationResult, SessionState, EntityState } from '../types';
 import { WorldIndex } from './WorldIndex';
 import { System } from './systems/System';
 import { MovementSystem } from './systems/MovementSystem';
@@ -8,6 +6,7 @@ import { GrowthSystem } from './systems/GrowthSystem';
 import { AiSystem } from './systems/AiSystem';
 import { VictorySystem } from './systems/VictorySystem';
 import { ActionProcessor } from './ActionProcessor';
+import { SAFETY_CONFIG } from '../rules/config';
 
 export interface TickResult {
   state: SessionState;
@@ -50,10 +49,11 @@ export class GameEngine {
    */
   public setPlayerIntent(isGrowing: boolean, intent: 'RECOVER' | 'UPGRADE' | null) {
       if (!this._state) return;
-      // This is a direct, simple state change not requiring full transactional logic
-      this._state.isPlayerGrowing = isGrowing;
-      this._state.playerGrowthIntent = intent;
-      this._state.stateVersion++;
+      const nextState = JSON.parse(JSON.stringify(this._state));
+      nextState.isPlayerGrowing = isGrowing;
+      nextState.playerGrowthIntent = intent;
+      nextState.stateVersion++;
+      this._state = nextState;
   }
 
   /**
@@ -76,7 +76,7 @@ export class GameEngine {
   
   /**
    * Main Simulation Loop
-   * Creates a temporary state copy, runs all systems on it, and then commits it.
+   * Creates a temporary state copy, runs all systems on it, sanitizes it, and then commits it.
    */
   public processTick(): TickResult {
     if (!this._state) return { state: {} as any, events: [] };
@@ -88,6 +88,9 @@ export class GameEngine {
         system.update(nextState, this._index, tickEvents);
     }
 
+    // MEMORY PROTECTION: Enforce strict limits before committing state
+    this.enforceSafetyLimits(nextState);
+
     nextState.stateVersion++;
     this._state = nextState;
 
@@ -95,6 +98,32 @@ export class GameEngine {
         state: this._state,
         events: tickEvents
     };
+  }
+
+  /**
+   * Prevents state bloat by truncating logs and queues.
+   * Keeps cloning fast and UI responsive.
+   */
+  private enforceSafetyLimits(state: SessionState) {
+      if (state.messageLog.length > SAFETY_CONFIG.MAX_LOG_SIZE) {
+          state.messageLog = state.messageLog.slice(0, SAFETY_CONFIG.MAX_LOG_SIZE);
+      }
+      if (state.botActivityLog.length > SAFETY_CONFIG.MAX_LOG_SIZE) {
+          state.botActivityLog = state.botActivityLog.slice(0, SAFETY_CONFIG.MAX_LOG_SIZE);
+      }
+      if (state.telemetry && state.telemetry.length > SAFETY_CONFIG.MAX_LOG_SIZE) {
+          state.telemetry = state.telemetry.slice(0, SAFETY_CONFIG.MAX_LOG_SIZE);
+      }
+
+      // Cap movement queues to prevent infinite walking loops
+      const entities = [state.player, ...state.bots];
+      for (const ent of entities) {
+          if (ent.movementQueue.length > SAFETY_CONFIG.MAX_MOVEMENT_QUEUE) {
+              ent.movementQueue = ent.movementQueue.slice(0, SAFETY_CONFIG.MAX_MOVEMENT_QUEUE);
+              // If we chopped the queue, force state to idle to prevent ghost movement
+              ent.state = EntityState.IDLE; 
+          }
+      }
   }
 
   /**

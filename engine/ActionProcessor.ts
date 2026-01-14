@@ -1,10 +1,12 @@
 
 
+
+
 import { GameState, GameAction, EntityType, EntityState, ValidationResult, SessionState } from '../types';
 import { WorldIndex } from './WorldIndex';
 import { getHexKey } from '../services/hexUtils';
 import { checkGrowthCondition } from '../rules/growth';
-import { GAME_CONFIG } from '../rules/config';
+import { GAME_CONFIG, SAFETY_CONFIG, DIFFICULTY_SETTINGS } from '../rules/config';
 
 /**
  * ActionProcessor is now a STATELESS service.
@@ -33,13 +35,21 @@ export class ActionProcessor {
             const neighbors = index.getValidNeighbors(action.coord.q, action.coord.r).map(h => ({q:h.q, r:h.r}));
             const occupied = index.getOccupiedHexesList();
             
-            const check = checkGrowthCondition(hex, actor, neighbors, state.grid, occupied);
+            // Resolve Queue Size
+            const queueSize = DIFFICULTY_SETTINGS[state.difficulty]?.queueSize || 3;
+
+            const check = checkGrowthCondition(hex, actor, neighbors, state.grid, occupied, queueSize);
             if (!check.canGrow) return { ok: false, reason: check.reason };
             break;
         }
         case 'MOVE': {
             if (action.path.length === 0) return { ok: false, reason: 'Empty Path' };
             
+            // SECURITY CHECK: Path Length Limit
+            if (action.path.length > SAFETY_CONFIG.MAX_PATH_LENGTH) {
+                return { ok: false, reason: 'Path too long (Safety Limit)' };
+            }
+
             const destination = action.path[action.path.length - 1];
             const entityAtDest = index.getEntityAt(destination.q, destination.r);
             if (entityAtDest && entityAtDest.id !== actor.id) {

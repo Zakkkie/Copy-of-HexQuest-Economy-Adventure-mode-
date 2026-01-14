@@ -1,6 +1,7 @@
 
+
 import { Hex, HexCoord } from '../types';
-import { GAME_CONFIG, getLevelConfig } from '../rules/config';
+import { GAME_CONFIG, getLevelConfig, SAFETY_CONFIG } from '../rules/config';
 
 export const getHexKey = (q: number, r: number): string => `${q},${r}`;
 export const getCoordinatesFromKey = (key: string): HexCoord => {
@@ -36,12 +37,15 @@ export const getSecondsToGrow = (level: number) => getLevelConfig(level).growthT
 
 export { checkGrowthCondition } from '../rules/growth';
 
-// A* Pathfinding (Optimized)
+// A* Pathfinding (Optimized & Protected)
 export const findPath = (start: HexCoord, end: HexCoord, grid: Record<string, Hex>, rank: number, obstacles: HexCoord[]): HexCoord[] | null => {
   const startKey = getHexKey(start.q, start.r);
   const endKey = getHexKey(end.q, end.r);
   if (startKey === endKey) return [];
   
+  // Quick pre-check for distance to avoid running A* on impossible long paths
+  if (cubeDistance(start, end) > SAFETY_CONFIG.MAX_PATH_LENGTH) return null;
+
   // O(1) Lookup
   const obsKeys = new Set(obstacles.map(o => getHexKey(o.q, o.r)));
   if (obsKeys.has(endKey)) return null;
@@ -55,21 +59,31 @@ export const findPath = (start: HexCoord, end: HexCoord, grid: Record<string, He
   fScore.set(startKey, cubeDistance(start, end));
 
   const prev: Record<string, HexCoord | null> = { [startKey]: null };
-  // Priority Queue simulated with array
+  // openSet is used as a Priority Queue
   const openSet: { k: string, f: number }[] = [{ k: startKey, f: fScore.get(startKey)! }];
   const closedSet = new Set<string>();
 
   let iter = 0;
   while (openSet.length > 0) {
-    if (iter++ > 2500) return null; // Safety break
+    // Safety guard: Processor Protection
+    if (iter++ > SAFETY_CONFIG.MAX_SEARCH_ITERATIONS) return null; 
     
-    // Sort by F-score (lowest first) - simulates Priority Queue extractMin
-    openSet.sort((a, b) => a.f - b.f);
-    const current = openSet.shift()!;
+    // --- PERFORMANCE OPTIMIZATION ---
+    // Linear scan O(n) for lowest F is faster than sorting for small sets
+    let lowestIndex = 0;
+    for (let i = 1; i < openSet.length; i++) {
+        if (openSet[i].f < openSet[lowestIndex].f) {
+            lowestIndex = i;
+        }
+    }
+    const current = openSet.splice(lowestIndex, 1)[0];
     const currentKey = current.k;
     
+    // Safety guard: Max path length during exploration
+    if ((gScore.get(currentKey) || 0) > SAFETY_CONFIG.MAX_PATH_LENGTH) continue;
+
     if (currentKey === endKey) {
-        // Reconstruct Path
+        // Reconstruct Path by backtracking
         const path: HexCoord[] = [];
         let curr: HexCoord | null = end;
         while (curr && getHexKey(curr.q, curr.r) !== startKey) {
@@ -118,5 +132,6 @@ export const findPath = (start: HexCoord, end: HexCoord, grid: Record<string, He
         }
     }
   }
+  // No path was found
   return null;
 };

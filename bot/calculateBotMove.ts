@@ -1,6 +1,8 @@
 
-import { Entity, Hex, HexCoord, WinCondition, BotAction } from '../types';
-import { getLevelConfig, GAME_CONFIG } from '../rules/config';
+
+
+import { Entity, Hex, HexCoord, WinCondition, BotAction, Difficulty } from '../types';
+import { getLevelConfig, GAME_CONFIG, DIFFICULTY_SETTINGS } from '../rules/config';
 import { getHexKey, cubeDistance, findPath, getNeighbors } from '../services/hexUtils';
 import { checkGrowthCondition } from '../rules/growth';
 import { WorldIndex } from '../engine/WorldIndex';
@@ -25,6 +27,7 @@ export const calculateBotMove = (
   obstacles: HexCoord[],
   index: WorldIndex,
   stateVersion: number,
+  difficulty: Difficulty,
   reservedHexKeys?: Set<string>
 ): AiResult => {
   
@@ -32,6 +35,9 @@ export const calculateBotMove = (
   const currentHex = grid[currentHexKey];
   const neighbors = getNeighbors(bot.q, bot.r);
   const otherUnitObstacles = obstacles.filter(o => o.q !== bot.q || o.r !== bot.r);
+  
+  // Resolve Queue Size
+  const queueSize = DIFFICULTY_SETTINGS[difficulty]?.queueSize || 3;
 
   // 1. Memory Initialization
   if (!bot.memory) {
@@ -41,7 +47,7 @@ export const calculateBotMove = (
   // --- CYCLE MANAGEMENT CHECK ---
   // If we are low on cycle upgrades (L1 sectors), force EXPAND to prevent lock
   const cycleHealth = bot.recentUpgrades.length;
-  const needsCycle = cycleHealth < GAME_CONFIG.UPGRADE_LOCK_QUEUE_SIZE;
+  const needsCycle = cycleHealth < queueSize;
 
   // --- DEADLOCK RESOLUTION ---
   if (bot.memory.lastActionFailed) {
@@ -60,7 +66,7 @@ export const calculateBotMove = (
   // --- 1. IMMEDIATE ACTION (If safe) ---
   // If standing on a hex that can be upgraded AND we are not in a failed state for it
   if (currentHex && currentHex.progress > 0 && !bot.memory.lastActionFailed) {
-     const check = checkGrowthCondition(currentHex, bot, neighbors, grid, otherUnitObstacles);
+     const check = checkGrowthCondition(currentHex, bot, neighbors, grid, otherUnitObstacles, queueSize);
      if (check.canGrow) {
         return { 
             action: { type: 'UPGRADE', coord: { q: bot.q, r: bot.r }, stateVersion },
@@ -119,7 +125,7 @@ export const calculateBotMove = (
         score += Math.random() * 2.0; 
 
         const targetNeighbors = getNeighbors(h.q, h.r);
-        const growCheck = checkGrowthCondition(h, bot, targetNeighbors, grid, otherUnitObstacles);
+        const growCheck = checkGrowthCondition(h, bot, targetNeighbors, grid, otherUnitObstacles, queueSize);
 
         if (growCheck.canGrow) {
            const targetLevel = h.currentLevel + 1;
@@ -166,7 +172,7 @@ export const calculateBotMove = (
 
       // A. If at target
       if (target.id === currentHexKey) {
-           const check = checkGrowthCondition(target, bot, neighbors, grid, otherUnitObstacles);
+           const check = checkGrowthCondition(target, bot, neighbors, grid, otherUnitObstacles, queueSize);
            if (check.canGrow) {
                 return { 
                     action: { type: 'UPGRADE', coord: { q: bot.q, r: bot.r }, stateVersion },

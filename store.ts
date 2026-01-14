@@ -1,5 +1,7 @@
 
 
+
+
 import { create } from 'zustand';
 import { GameState, Entity, Hex, EntityType, UIState, WinCondition, LeaderboardEntry, EntityState, MoveAction, RechargeAction, SessionState } from './types.ts';
 import { GAME_CONFIG } from './rules/config.ts';
@@ -9,15 +11,23 @@ import { checkGrowthCondition } from './rules/growth.ts';
 
 const MOCK_USER_DB: Record<string, { password: string; avatarColor: string; avatarIcon: string }> = {};
 const BOT_PALETTE = ['#ef4444', '#f97316', '#a855f7', '#ec4899']; 
-const INITIAL_LEADERBOARD: LeaderboardEntry[] = [
-  { nickname: 'SENTINEL_AI', avatarColor: '#ef4444', avatarIcon: 'bot', maxCoins: 2500, maxLevel: 12, timestamp: Date.now() - 100000 },
-];
+const LEADERBOARD_STORAGE_KEY = 'hexquest_leaderboard_v3'; // Incremented version
+
+// Helper to load persisted leaderboard
+const loadLeaderboard = (): LeaderboardEntry[] => {
+  try {
+    const stored = localStorage.getItem(LEADERBOARD_STORAGE_KEY);
+    return stored ? JSON.parse(stored) : [];
+  } catch (e) {
+    console.error("Failed to load leaderboard", e);
+    return [];
+  }
+};
 
 interface AuthResponse { success: boolean; message?: string; }
 
 interface GameStore extends GameState {
-  engine: GameEngine | null;
-  engineVersion: number;
+  session: SessionState | null;
 
   setUIState: (state: UIState) => void;
   loginAsGuest: (n: string, c: string, i: string) => void;
@@ -35,6 +45,9 @@ interface GameStore extends GameState {
   showToast: (msg: string, type: 'error' | 'success' | 'info') => void;
   hideToast: () => void;
 }
+
+// Module-level singleton to hold the mutable engine instance outside of React's state
+let engine: GameEngine | null = null;
 
 // Generates the data for a NEW game session. UI state is not part of this.
 const createInitialSessionData = (winCondition: WinCondition): SessionState => {
@@ -69,6 +82,7 @@ const createInitialSessionData = (winCondition: WinCondition): SessionState => {
     sessionId: Math.random().toString(36).substring(2, 15),
     sessionStartTime: Date.now(),
     winCondition,
+    difficulty: winCondition.difficulty,
     grid: initialGrid,
     player: {
       id: 'player-1', type: EntityType.PLAYER, state: EntityState.IDLE, q: 0, r: 0,
@@ -94,12 +108,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
   user: null,
   toast: null,
   pendingConfirmation: null,
-  leaderboard: [...INITIAL_LEADERBOARD],
+  leaderboard: loadLeaderboard(),
   hasActiveSession: false,
   
-  // Engine State
-  engine: null,
-  engineVersion: 0,
+  // Reactive snapshot of the engine's state
+  session: null,
   
   setUIState: (uiState) => set({ uiState }),
   
@@ -116,15 +129,15 @@ export const useGameStore = create<GameStore>((set, get) => ({
   startNewGame: (winCondition) => {
       get().abandonSession(); // Ensure old engine is destroyed
       const initialSessionState = createInitialSessionData(winCondition);
-      const newEngine = new GameEngine(initialSessionState); 
-      set({ engine: newEngine, hasActiveSession: true, uiState: 'GAME', engineVersion: 1 });
+      engine = new GameEngine(initialSessionState); 
+      set({ session: engine.state, hasActiveSession: true, uiState: 'GAME' });
   },
 
   abandonSession: () => {
-      const engine = get().engine;
       if (engine) {
           engine.destroy();
-          set({ engine: null, hasActiveSession: false, uiState: 'MENU' });
+          engine = null;
+          set({ session: null, hasActiveSession: false, uiState: 'MENU' });
       }
   },
   
@@ -133,42 +146,38 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   // Player Actions (delegated to engine)
   togglePlayerGrowth: (intent: 'RECOVER' | 'UPGRADE' = 'RECOVER') => {
-      const { engine } = get();
       if (!engine) return;
-      const { state } = engine;
+      const { session } = get();
+      if (!session) return;
 
-      // FIX: The `state.uiState` check was incorrect as uiState is not on the engine's session state.
-      // Removed the check. The moving check is the only one needed.
-      if (state.player.state === EntityState.MOVING) return;
+      if (session.player.state === EntityState.MOVING) return;
       
-      const isCurrentlyGrowing = state.isPlayerGrowing;
+      const isCurrentlyGrowing = session.isPlayerGrowing;
       engine.setPlayerIntent(!isCurrentlyGrowing, isCurrentlyGrowing ? null : intent);
-
-      set(s => ({ engineVersion: s.engineVersion + 1 }));
+      set({ session: engine.state });
   },
 
   rechargeMove: () => {
-      const { engine } = get();
       if (!engine) return;
 
       const action: RechargeAction = { type: 'RECHARGE_MOVE', stateVersion: engine.state.stateVersion };
       const res = engine.applyAction(engine.state.player.id, action);
       if (res.ok) {
-        set(s => ({ engineVersion: s.engineVersion + 1 }));
+        set({ session: engine.state });
       } else {
         set({ toast: { message: res.reason || "Recharge Failed", type: 'error', timestamp: Date.now() } });
       }
   },
 
   movePlayer: (tq, tr) => {
-      const { engine } = get();
       if (!engine) return;
-      const { state } = engine;
+      const { session } = get();
+      if (!session) return;
 
-      if (state.player.state === EntityState.MOVING) return;
+      if (session.player.state === EntityState.MOVING) return;
       
-      const obstacles = state.bots.map(b => ({ q: b.q, r: b.r }));
-      const path = findPath({ q: state.player.q, r: state.player.r }, { q: tq, r: tr }, state.grid, state.player.playerLevel, obstacles);
+      const obstacles = session.bots.map(b => ({ q: b.q, r: b.r }));
+      const path = findPath({ q: session.player.q, r: session.player.r }, { q: tq, r: tr }, session.grid, session.player.playerLevel, obstacles);
       
       if (!path) {
         set({ toast: { message: "Path Blocked", type: 'error', timestamp: Date.now() } });
@@ -177,14 +186,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
       let totalMoveCost = 0;
       for (const step of path) {
-        const hex = state.grid[getHexKey(step.q, step.r)];
+        const hex = session.grid[getHexKey(step.q, step.r)];
         totalMoveCost += (hex && hex.maxLevel >= 2) ? hex.maxLevel : 1;
       }
 
-      const costMoves = Math.min(state.player.moves, totalMoveCost);
+      const costMoves = Math.min(session.player.moves, totalMoveCost);
       const costCoins = (totalMoveCost - costMoves) * GAME_CONFIG.EXCHANGE_RATE_COINS_PER_MOVE;
 
-      if (state.player.coins < costCoins) {
+      if (session.player.coins < costCoins) {
         set({ toast: { message: `Need ${costCoins} credits`, type: 'error', timestamp: Date.now() } });
         return;
       }
@@ -193,25 +202,26 @@ export const useGameStore = create<GameStore>((set, get) => ({
         return;
       }
 
-      const action: MoveAction = { type: 'MOVE', path, stateVersion: state.stateVersion };
-      const res = engine.applyAction(state.player.id, action);
+      const action: MoveAction = { type: 'MOVE', path, stateVersion: session.stateVersion };
+      const res = engine.applyAction(session.player.id, action);
       if (res.ok) {
-        set(s => ({ engineVersion: s.engineVersion + 1, isPlayerGrowing: false, playerGrowthIntent: null }));
+        set({ session: engine.state });
       } else {
         set({ toast: { message: res.reason || "Error", type: 'error', timestamp: Date.now() } });
       }
   },
 
   confirmPendingAction: () => {
-      const { engine, pendingConfirmation } = get();
-      if (!engine || !pendingConfirmation) return;
+      if (!engine) return;
+      const { pendingConfirmation, session } = get();
+      if (!pendingConfirmation || !session) return;
 
       const { path } = pendingConfirmation.data;
-      const action: MoveAction = { type: 'MOVE', path, stateVersion: engine.state.stateVersion };
+      const action: MoveAction = { type: 'MOVE', path, stateVersion: session.stateVersion };
       
-      const res = engine.applyAction(engine.state.player.id, action);
+      const res = engine.applyAction(session.player.id, action);
       if (res.ok) {
-        set(s => ({ engineVersion: s.engineVersion + 1, pendingConfirmation: null, isPlayerGrowing: false, playerGrowthIntent: null }));
+        set({ session: engine.state, pendingConfirmation: null });
       } else {
         set({ toast: { message: res.reason || "Error", type: 'error', timestamp: Date.now() }, pendingConfirmation: null });
       }
@@ -221,12 +231,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   // MAIN LOOP
   tick: () => {
-      const { engine } = get();
       if (!engine || engine.state.gameStatus !== 'PLAYING') return;
       
       const result = engine.processTick();
       let newToast = get().toast;
       let leaderboardUpdated = false;
+      const currentLeaderboard = [...get().leaderboard];
       
       if (result.events.length > 0) {
           const error = result.events.find(e => e.type === 'ACTION_DENIED' || e.type === 'ERROR');
@@ -236,16 +246,30 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
           const leaderboardEvent = result.events.find(e => e.type === 'LEADERBOARD_UPDATE');
           if (leaderboardEvent && leaderboardEvent.data?.entry) {
-              const newEntry = leaderboardEvent.data.entry as LeaderboardEntry;
-              const currentLeaderboard = get().leaderboard;
+              const engineStats = leaderboardEvent.data.entry as LeaderboardEntry;
+              const user = get().user;
+              
+              // MERGE Engine Stats with User Profile to create a complete entry
+              const newEntry: LeaderboardEntry = {
+                  nickname: user?.nickname || 'Unknown Commander',
+                  avatarColor: user?.avatarColor || '#3b82f6',
+                  avatarIcon: user?.avatarIcon || 'user',
+                  maxCoins: engineStats.maxCoins,
+                  maxLevel: engineStats.maxLevel,
+                  difficulty: engineStats.difficulty || 'MEDIUM', // Ensure difficulty is saved
+                  timestamp: Date.now()
+              };
 
-              const existingIndex = currentLeaderboard.findIndex(e => e.nickname === newEntry.nickname);
+              // Logic: Update existing record for this user if improved, or add new
+              const existingIndex = currentLeaderboard.findIndex(e => e.nickname === newEntry.nickname && e.difficulty === newEntry.difficulty);
               let shouldUpdate = false;
 
               if (existingIndex > -1) {
                   const existing = currentLeaderboard[existingIndex];
+                  // Scoring: Weighted sum based on Tier targets roughly
                   const existingScore = existing.maxCoins + existing.maxLevel * 100;
                   const newScore = newEntry.maxCoins + newEntry.maxLevel * 100;
+                  
                   if (newScore > existingScore) {
                       currentLeaderboard[existingIndex] = newEntry;
                       shouldUpdate = true;
@@ -262,14 +286,17 @@ export const useGameStore = create<GameStore>((set, get) => ({
                       return scoreB - scoreA;
                   });
                   leaderboardUpdated = true;
+                  
+                  // PERSIST
+                  localStorage.setItem(LEADERBOARD_STORAGE_KEY, JSON.stringify(currentLeaderboard));
               }
           }
       }
 
       set(state => ({ 
-          engineVersion: state.engineVersion + 1,
+          session: result.state,
           toast: newToast,
-          leaderboard: leaderboardUpdated ? [...state.leaderboard] : state.leaderboard,
+          leaderboard: leaderboardUpdated ? currentLeaderboard : state.leaderboard,
       }));
   }
 }));

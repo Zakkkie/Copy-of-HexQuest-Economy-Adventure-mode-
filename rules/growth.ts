@@ -1,6 +1,7 @@
 
+
+
 import { Hex, Entity, HexCoord } from '../types';
-import { UPGRADE_LOCK_QUEUE_SIZE } from './config';
 
 export type GrowthCheckResult = {
   canGrow: boolean;
@@ -12,7 +13,8 @@ export function checkGrowthCondition(
   entity: Entity,
   neighbors: HexCoord[],
   grid: Record<string, Hex>,
-  occupiedHexes: HexCoord[] = []
+  occupiedHexes: HexCoord[] = [],
+  requiredQueueSize: number = 3
 ): GrowthCheckResult {
   if (!hex) return { canGrow: false, reason: 'Invalid Hex' };
 
@@ -38,10 +40,10 @@ export function checkGrowthCondition(
   // CYCLE LOCK RULE: Must have gathered enough L1 sectors (momentum) to upgrade to L2+
   // targetLevel > 1 means we are upgrading FROM L1 or higher.
   if (targetLevel > 1) {
-    if (entity.recentUpgrades.length < UPGRADE_LOCK_QUEUE_SIZE) {
+    if (entity.recentUpgrades.length < requiredQueueSize) {
       return { 
         canGrow: false, 
-        reason: `CYCLE INCOMPLETE (${entity.recentUpgrades.length}/${UPGRADE_LOCK_QUEUE_SIZE})` 
+        reason: `CYCLE INCOMPLETE (${entity.recentUpgrades.length}/${requiredQueueSize})` 
       };
     }
   }

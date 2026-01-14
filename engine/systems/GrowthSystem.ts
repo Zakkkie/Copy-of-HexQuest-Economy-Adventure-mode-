@@ -1,20 +1,26 @@
 
 
+
+
+
 import { System } from './System';
 import { GameState, GameEvent, EntityState, Entity, EntityType, SessionState } from '../../types';
 import { WorldIndex } from '../WorldIndex';
 import { getHexKey } from '../../services/hexUtils';
 import { GameEventFactory } from '../events';
 import { checkGrowthCondition } from '../../rules/growth';
-import { getLevelConfig, GAME_CONFIG } from '../../rules/config';
+import { getLevelConfig, GAME_CONFIG, DIFFICULTY_SETTINGS } from '../../rules/config';
 
 export class GrowthSystem implements System {
   update(state: SessionState, index: WorldIndex, events: GameEvent[]): void {
     const entities = [state.player, ...state.bots];
     const newGrowingBotIds: string[] = [];
 
+    // Resolve Queue Size from Difficulty
+    const queueSize = DIFFICULTY_SETTINGS[state.difficulty]?.queueSize || 3;
+
     for (const entity of entities) {
-      const isGrowing = this.processEntity(entity, state, index, events);
+      const isGrowing = this.processEntity(entity, state, index, events, queueSize);
       
       // Update tracking flags for state
       if (isGrowing) {
@@ -33,12 +39,10 @@ export class GrowthSystem implements System {
     state.growingBotIds = newGrowingBotIds;
   }
 
-  private processEntity(entity: Entity, state: SessionState, index: WorldIndex, events: GameEvent[]): boolean {
+  private processEntity(entity: Entity, state: SessionState, index: WorldIndex, events: GameEvent[], queueSize: number): boolean {
     const hasUpgradeCmd = entity.movementQueue.length > 0 && entity.movementQueue[0].upgrade;
     
     // Determine Intent
-    // For player: intent comes from UI state.
-    // For bots: intent comes from having an upgrade command in queue.
     const isUserIntentActive = entity.type === EntityType.PLAYER && state.isPlayerGrowing;
     const userIntentType = entity.type === EntityType.PLAYER ? state.playerGrowthIntent : null;
     
@@ -58,7 +62,7 @@ export class GrowthSystem implements System {
     const key = getHexKey(entity.q, entity.r);
     const hex = state.grid[key];
     
-    // Safety check: if hex doesn't exist, abort
+    // Safety check
     if (!hex) {
          if (hasUpgradeCmd) entity.movementQueue.shift();
          entity.state = EntityState.IDLE;
@@ -70,20 +74,21 @@ export class GrowthSystem implements System {
     
     const effectiveIntent = entity.type === EntityType.PLAYER ? (userIntentType || 'RECOVER') : (hasUpgradeCmd ? 'UPGRADE' : 'RECOVER');
 
-    const condition = checkGrowthCondition(hex, entity, neighbors, state.grid, occupied);
+    // PASS DYNAMIC QUEUE SIZE HERE
+    const condition = checkGrowthCondition(hex, entity, neighbors, state.grid, occupied, queueSize);
     
     // Validation Failed
     if (!condition.canGrow) {
       if (hasUpgradeCmd) entity.movementQueue.shift(); 
       entity.state = EntityState.IDLE;
       
-      // Notify player why growth stopped
+      // Notify player
       if (entity.type === EntityType.PLAYER) {
          const msg = condition.reason || "Growth Conditions Not Met";
          state.messageLog.unshift(`[YOU] ${msg}`);
          if (state.messageLog.length > 100) state.messageLog.pop();
          events.push(GameEventFactory.create('ACTION_DENIED', msg, entity.id));
-         state.isPlayerGrowing = false; // Force stop in store
+         state.isPlayerGrowing = false; 
       }
       return false;
     }
@@ -105,6 +110,9 @@ export class GrowthSystem implements System {
         newMaxLevel = targetLevel;
         didMaxIncrease = true;
         entity.playerLevel = Math.max(entity.playerLevel, targetLevel);
+        
+        // DEDUCT UPGRADE COST
+        entity.coins -= config.cost;
 
         if (targetLevel === 1) {
              // ACQUISITION
@@ -112,17 +120,16 @@ export class GrowthSystem implements System {
              
              // Cycle Management: Add to queue
              const q = [...entity.recentUpgrades, hex.id];
-             if (q.length > GAME_CONFIG.UPGRADE_LOCK_QUEUE_SIZE) q.shift();
+             if (q.length > queueSize) q.shift(); // Use dynamic size here too
              entity.recentUpgrades = q;
              
-             const msg = `${prefix} Sector L1 Acquired`;
+             const msg = `${prefix} Sector L1 Acquired (Cost: ${config.cost})`;
              state.messageLog.unshift(msg);
              if (state.messageLog.length > 100) state.messageLog.pop();
              events.push(GameEventFactory.create('SECTOR_ACQUIRED', msg, entity.id));
         } else {
              // LEVEL UP
-             // Optional: Reset queue on Rank Up? Currently keeping it simple.
-             const msg = `${prefix} Reached Rank L${targetLevel}`;
+             const msg = `${prefix} Reached Rank L${targetLevel} (Cost: ${config.cost})`;
              state.messageLog.unshift(msg);
              if (state.messageLog.length > 100) state.messageLog.pop();
              events.push(GameEventFactory.create('LEVEL_UP', msg, entity.id));
@@ -143,16 +150,12 @@ export class GrowthSystem implements System {
           ownerId: newOwnerId
       };
       
-      // Intent Check: Should we stop?
-      // Default rule: Stop if we hit the new max level (one step at a time).
       let shouldContinue = targetLevel < newMaxLevel;
       
-      // Special Case: If we were just Recovering (Repairing) and intent is UPGRADE,
-      // check if we can immediately start the next level.
       if (!shouldContinue && effectiveIntent === 'UPGRADE' && !didMaxIncrease) {
           const nextCheck = checkGrowthCondition(
              state.grid[key],
-             entity, neighbors, state.grid, occupied
+             entity, neighbors, state.grid, occupied, queueSize
           );
           if (nextCheck.canGrow) shouldContinue = true;
       }

@@ -2,6 +2,8 @@
 
 
 
+
+
 export type HexCoord = { q: number; r: number; upgrade?: boolean };
 
 // Read-only view of a Hex for the Bot (Architecture Requirement)
@@ -131,13 +133,14 @@ export interface PendingConfirmation {
   };
 }
 
-export type WinType = 'WEALTH' | 'DOMINATION';
+export type Difficulty = 'EASY' | 'MEDIUM' | 'HARD';
 
 export interface WinCondition {
-  type: WinType;
-  target: number;
+  targetLevel: number;
+  targetCoins: number;
   label: string;
   botCount: number; 
+  difficulty: Difficulty;
 }
 
 export interface LeaderboardEntry {
@@ -147,6 +150,7 @@ export interface LeaderboardEntry {
   maxCoins: number;
   maxLevel: number;
   timestamp: number;
+  difficulty: Difficulty;
 }
 
 // Authoritative state for a single game session, managed by GameEngine
@@ -155,6 +159,7 @@ export interface SessionState {
   sessionId: string; 
   sessionStartTime: number; 
   winCondition: WinCondition | null;
+  difficulty: Difficulty;
   grid: Record<string, Hex>; 
   player: Entity;
   bots: Entity[]; 

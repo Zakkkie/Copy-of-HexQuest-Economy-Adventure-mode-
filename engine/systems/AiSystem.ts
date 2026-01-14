@@ -1,5 +1,7 @@
 
 
+
+
 import { System } from './System';
 import { GameState, GameEvent, EntityState, EntityType, SessionState } from '../../types';
 import { WorldIndex } from '../WorldIndex';
@@ -40,6 +42,7 @@ export class AiSystem implements System {
         tickObstacles, 
         index, 
         state.stateVersion,
+        state.difficulty,
         tickReservedKeys 
       );
 

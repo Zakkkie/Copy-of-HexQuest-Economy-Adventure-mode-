@@ -1,24 +1,21 @@
-
-
 import React, { useEffect, useCallback, useState, useMemo, useRef } from 'react';
 import { Stage, Layer, Line } from 'react-konva';
 import Konva from 'konva';
 import { useGameStore } from '../store.ts';
-import { getHexKey, getNeighbors, getSecondsToGrow, hexToPixel, calculateReward, findPath } from '../services/hexUtils.ts';
+import { getHexKey, getNeighbors, getSecondsToGrow, hexToPixel, findPath } from '../services/hexUtils.ts';
 import { checkGrowthCondition } from '../rules/growth.ts';
 import Hexagon from './Hexagon.tsx'; 
 import Unit from './Unit.tsx';
 import Background from './Background.tsx';
 import { 
-  AlertCircle, Pause, Play, Trophy, Coins, Footprints, AlertTriangle, Menu, LogOut,
-  Crown, Target, TrendingUp, ChevronDown, ChevronUp, Shield, Clock, MapPin, Zap,
-  RotateCcw, RotateCw, ArrowUp, CheckCircle2, ChevronsUp, Lock, Bot, Activity
+  AlertCircle, Pause, Play, Trophy, Coins, Footprints, AlertTriangle, LogOut,
+  Crown, Target, TrendingUp, ChevronDown, ChevronUp, Shield, MapPin,
+  RotateCcw, RotateCw, CheckCircle2, ChevronsUp, Lock, Bot, Activity
 } from 'lucide-react';
-import { UPGRADE_LOCK_QUEUE_SIZE, EXCHANGE_RATE_COINS_PER_MOVE } from '../rules/config.ts';
+import { EXCHANGE_RATE_COINS_PER_MOVE, DIFFICULTY_SETTINGS } from '../rules/config.ts';
 import { Hex, EntityType, EntityState } from '../types.ts';
 
-const VIEWPORT_PADDING = 200; 
-const ANIMATION_STEP_MS = 250; 
+const VIEWPORT_PADDING = 300; 
 
 // Render Item Type for Z-Sorting
 type RenderItem = 
@@ -28,17 +25,14 @@ type RenderItem =
 
 const GameView: React.FC = () => {
   // --- STATE SELECTION ---
-  // Subscribe to the engine instance and its version to trigger re-renders
-  const engine = useGameStore(state => state.engine);
-  useGameStore(state => state.engineVersion); // This is the key to re-rendering on tick
-
-  // Select UI-specific state directly from the store
+  const session = useGameStore(state => state.session);
   const { user, toast, pendingConfirmation, setUIState, hideToast, showToast, abandonSession, tick, movePlayer, togglePlayerGrowth, confirmPendingAction, cancelPendingAction } = useGameStore();
 
-  // Guard against null engine (e.g., during screen transitions)
-  if (!engine) return null;
-  const { grid, player, bots, winCondition, gameStatus, messageLog, botActivityLog, isPlayerGrowing, playerGrowthIntent, sessionStartTime } = engine.state;
+  if (!session) return null;
+  const { grid, player, bots, winCondition, gameStatus, messageLog, botActivityLog, isPlayerGrowing, playerGrowthIntent, sessionStartTime, difficulty } = session;
   
+  const queueSize = DIFFICULTY_SETTINGS[difficulty]?.queueSize || 3;
+
   // Dimensions
   const [dimensions, setDimensions] = useState({ 
     width: window.innerWidth, 
@@ -81,7 +75,7 @@ const GameView: React.FC = () => {
     }
   }, [messageLog, botActivityLog, activeTab]);
 
-  // Game Loop (Tick) - Attached to View Lifecycle
+  // Game Loop (Tick)
   useEffect(() => {
     const interval = setInterval(tick, 1000);
     return () => clearInterval(interval);
@@ -104,24 +98,27 @@ const GameView: React.FC = () => {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // Derived State
+  // Derived State - SAFE GUARDS ADDED HERE
   const currentHex = grid[getHexKey(player.q, player.r)];
   const neighbors = useMemo(() => getNeighbors(player.q, player.r), [player.q, player.r]);
-  const botPositions = useMemo(() => bots.map(b => ({ q: b.q, r: b.r })), [bots]);
+  
+  // Safe bot filtering to prevent "undefined reading 'q'" crashes
+  const safeBots = useMemo(() => (bots || []).filter(b => b && typeof b.q === 'number' && typeof b.r === 'number'), [bots]);
+  const botPositions = useMemo(() => safeBots.map(b => ({ q: b.q, r: b.r })), [safeBots]);
   
   const isMoving = player.state === EntityState.MOVING;
   const canRecover = currentHex ? (currentHex.currentLevel < currentHex.maxLevel) : false;
 
   const growthCondition = useMemo(() => {
     if (!currentHex) return { canGrow: false, reason: 'Invalid Hex' };
-    return checkGrowthCondition(currentHex, player, neighbors, grid, botPositions);
-  }, [currentHex, player, grid, neighbors, botPositions]);
+    return checkGrowthCondition(currentHex, player, neighbors, grid, botPositions, queueSize);
+  }, [currentHex, player, grid, neighbors, botPositions, queueSize]);
 
   const upgradeCondition = useMemo(() => {
     if (!currentHex) return { canGrow: false, reason: 'Invalid Hex' };
     const simulatedHex = { ...currentHex, currentLevel: Math.max(0, currentHex.maxLevel) };
-    return checkGrowthCondition(simulatedHex, player, neighbors, grid, botPositions);
-  }, [currentHex, player, grid, neighbors, botPositions]);
+    return checkGrowthCondition(simulatedHex, player, neighbors, grid, botPositions, queueSize);
+  }, [currentHex, player, grid, neighbors, botPositions, queueSize]);
 
   const canUpgrade = upgradeCondition.canGrow; 
 
@@ -173,7 +170,7 @@ const GameView: React.FC = () => {
     const hex = grid[hoveredHexId];
     if (!hex) return null;
 
-    const obstacles = bots.map(b => ({ q: b.q, r: b.r }));
+    const obstacles = safeBots.map(b => ({ q: b.q, r: b.r }));
     const isBlockedByBot = obstacles.some(o => o.q === hex.q && o.r === hex.r);
     const isPlayerPos = hex.q === player.q && hex.r === player.r;
     
@@ -232,7 +229,7 @@ const GameView: React.FC = () => {
     return { 
         hex, label, costMoves, costCoins, canAffordCoins, isReachable, isLocked, statusText, statusColor, Icon 
     };
-  }, [hoveredHexId, grid, player.q, player.r, player.playerLevel, player.moves, player.coins, bots]);
+  }, [hoveredHexId, grid, player.q, player.r, player.playerLevel, player.moves, player.coins, safeBots]);
 
   const formatTime = (ms: number) => {
     const totalSeconds = Math.ceil(ms / 1000);
@@ -345,15 +342,32 @@ const GameView: React.FC = () => {
      const items: RenderItem[] = [];
      const allHexes = Object.values(grid) as Hex[];
 
+     // --- OPTIMIZATION: Viewport Culling ---
+     const inverseScale = 1 / viewState.scale;
+     const visibleMinX = -viewState.x * inverseScale - VIEWPORT_PADDING;
+     const visibleMaxX = (dimensions.width - viewState.x) * inverseScale + VIEWPORT_PADDING;
+     const visibleMinY = -viewState.y * inverseScale - VIEWPORT_PADDING;
+     const visibleMaxY = (dimensions.height - viewState.y) * inverseScale + VIEWPORT_PADDING;
+
      for (const hex of allHexes) {
-        const { y } = hexToPixel(hex.q, hex.r, cameraRotation);
+        if (!hex) continue;
+        const { x, y } = hexToPixel(hex.q, hex.r, cameraRotation);
+        
+        if (x < visibleMinX || x > visibleMaxX || y < visibleMinY || y > visibleMaxY) {
+            continue; 
+        }
+
         items.push({ type: 'HEX', id: hex.id, depth: y, q: hex.q, r: hex.r });
      }
 
-     const allUnits = [{ ...player, isPlayer: true }, ...bots.map(b => ({ ...b, isPlayer: false }))];
+     // FIX: Safe bot mapping to prevent undefined crashes
+     const allUnits = [{ ...player, isPlayer: true }, ...safeBots.map(b => ({ ...b, isPlayer: false }))];
      const now = Date.now();
 
      for (const u of allUnits) {
+         // CRITICAL FIX: Ensure 'q' and 'r' exist
+         if (!u || typeof u.q !== 'number' || typeof u.r !== 'number') continue;
+
          let track = movementTracker.current[u.id];
          if (!track) {
              track = { lastQ: u.q, lastR: u.r, fromQ: u.q, fromR: u.r, startTime: 0 };
@@ -369,6 +383,11 @@ const GameView: React.FC = () => {
          }
 
          const currentPixel = hexToPixel(u.q, u.r, cameraRotation);
+         
+         if (currentPixel.x < visibleMinX || currentPixel.x > visibleMaxX || currentPixel.y < visibleMinY || currentPixel.y > visibleMaxY) {
+             continue;
+         }
+
          let sortY = currentPixel.y;
          
          if (now - track.startTime < 350) {
@@ -385,7 +404,7 @@ const GameView: React.FC = () => {
         neighbors.forEach(neighbor => {
             const key = getHexKey(neighbor.q, neighbor.r);
             const hex = grid[key];
-            const isBot = bots.some(b => b.q === neighbor.q && b.r === neighbor.r);
+            const isBot = safeBots.some(b => b.q === neighbor.q && b.r === neighbor.r);
             const isLocked = hex && hex.maxLevel > player.playerLevel;
             const endLevel = hex ? hex.maxLevel : 0;
             const isReachableHeight = Math.abs(startLevel - endLevel) <= 1;
@@ -393,24 +412,29 @@ const GameView: React.FC = () => {
             if (!isBot && isReachableHeight) {
                 const start = hexToPixel(player.q, player.r, cameraRotation);
                 const end = hexToPixel(neighbor.q, neighbor.r, cameraRotation);
-                const startH = grid[getHexKey(player.q, player.r)] ? (10 + grid[getHexKey(player.q, player.r)].maxLevel * 6) : 10;
-                const endH = hex ? (10 + hex.maxLevel * 6) : 10;
-                const sY = start.y - startH;
-                const eY = end.y - endH;
-                let cost = 1;
-                if (hex && hex.maxLevel >= 2) cost = hex.maxLevel;
-                const canAfford = player.moves >= cost || player.coins >= (cost * EXCHANGE_RATE_COINS_PER_MOVE);
                 
-                items.push({
-                    type: 'CONN', id: `conn-${key}`, depth: Math.min(start.y, end.y),
-                    points: [start.x, sY, end.x, eY], color: canAfford ? '#3b82f6' : '#ef4444',
-                    dash: [5, 5], opacity: isLocked ? 0.2 : 0.6
-                });
+                if ((start.x > visibleMinX && start.x < visibleMaxX && start.y > visibleMinY && start.y < visibleMaxY) ||
+                    (end.x > visibleMinX && end.x < visibleMaxX && end.y > visibleMinY && end.y < visibleMaxY)) {
+                        
+                    const startH = grid[getHexKey(player.q, player.r)] ? (10 + grid[getHexKey(player.q, player.r)].maxLevel * 6) : 10;
+                    const endH = hex ? (10 + hex.maxLevel * 6) : 10;
+                    const sY = start.y - startH;
+                    const eY = end.y - endH;
+                    let cost = 1;
+                    if (hex && hex.maxLevel >= 2) cost = hex.maxLevel;
+                    const canAfford = player.moves >= cost || player.coins >= (cost * EXCHANGE_RATE_COINS_PER_MOVE);
+                    
+                    items.push({
+                        type: 'CONN', id: `conn-${key}`, depth: Math.min(start.y, end.y),
+                        points: [start.x, sY, end.x, eY], color: canAfford ? '#3b82f6' : '#ef4444',
+                        dash: [5, 5], opacity: isLocked ? 0.2 : 0.6
+                    });
+                }
             }
         });
      }
      return items.sort((a, b) => a.depth - b.depth);
-  }, [grid, player, bots, cameraRotation, isMoving, playerNeighborKeys]);
+  }, [grid, player, safeBots, cameraRotation, isMoving, playerNeighborKeys, viewState, dimensions]);
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-[#020617]" onContextMenu={(e) => e.preventDefault()}>
@@ -442,19 +466,19 @@ const GameView: React.FC = () => {
           <Layer>
             {renderList.map((item) => {
                 if (item.type === 'HEX') {
-                    const isOccupied = (item.q === player.q && item.r === player.r) || bots.some(b => b.q === item.q && b.r === item.r);
+                    const isOccupied = (item.q === player.q && item.r === player.r) || safeBots.some(b => b.q === item.q && b.r === item.r);
                     return <Hexagon key={item.id} id={item.id} rotation={cameraRotation} isPlayerNeighbor={playerNeighborKeys.has(item.id)} playerRank={player.playerLevel} isOccupied={isOccupied} onHexClick={movePlayer} onHover={setHoveredHexId} />;
                 } else if (item.type === 'UNIT') {
-                    const unit = item.isPlayer ? player : bots.find(b => b.id === item.id);
+                    const unit = item.isPlayer ? player : safeBots.find(b => b.id === item.id);
                     if (!unit) return null;
                     const hexKey = getHexKey(unit.q, unit.r);
                     const hLevel = grid[hexKey]?.maxLevel || 0;
                     return <Unit key={item.id} q={unit.q} r={unit.r} type={item.isPlayer ? EntityType.PLAYER : EntityType.BOT} color={unit.avatarColor} rotation={cameraRotation} hexLevel={hLevel} totalCoinsEarned={unit.totalCoinsEarned} />;
                 } else if (item.type === 'CONN') {
-                    return <Line key={item.id} points={item.points} stroke={item.color} strokeWidth={2} dash={item.dash} opacity={item.opacity} listening={false} />;
+                    return <Line key={item.id} points={item.points} stroke={item.color} strokeWidth={2} dash={item.dash} opacity={item.opacity} listening={false} perfectDrawEnabled={false} />;
                 }
                 return null;
-            }).filter(Boolean)}
+            })}
           </Layer>
         </Stage>
       </div>
@@ -477,7 +501,7 @@ const GameView: React.FC = () => {
                        <div className="flex items-center gap-1.5 md:gap-2">
                            <TrendingUp className="w-4 h-4 md:w-5 md:h-5 text-emerald-500" />
                            <div className="flex gap-0.5 md:gap-1 h-4 md:h-5 items-center">
-                               {Array.from({length: UPGRADE_LOCK_QUEUE_SIZE}).map((_, i) => (
+                               {Array.from({length: queueSize}).map((_, i) => (
                                   <div key={i} className={`w-1.5 md:w-2 h-3 md:h-4 rounded-sm transition-all duration-300 ${player.recentUpgrades.length > i ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)] scale-110' : 'bg-slate-800'}`} />
                                ))}
                            </div>
@@ -505,7 +529,7 @@ const GameView: React.FC = () => {
                   <div className="flex items-center gap-2 px-4 py-1.5 bg-slate-950/80 backdrop-blur-md rounded-full border border-slate-800/60 shadow-lg animate-in slide-in-from-top-1 fade-in">
                       <Target className="w-3 h-3 text-cyan-400" />
                       <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                          Goal: <span className="text-cyan-100">{winCondition.type === 'WEALTH' ? `${winCondition.target} COINS` : `LEVEL ${winCondition.target}`}</span>
+                          Goal: <span className="text-cyan-100">{winCondition.label}</span>
                       </span>
                   </div>
                )}
@@ -524,7 +548,7 @@ const GameView: React.FC = () => {
                    
                    {isRankingsOpen && (
                        <div className="flex flex-col p-2 pt-0 gap-1.5 max-h-[40vh] overflow-y-auto no-scrollbar">
-                           {[player, ...bots].sort((a, b) => (b.totalCoinsEarned || 0) - (a.totalCoinsEarned || 0)).map((e) => {
+                           {[player, ...safeBots].sort((a, b) => (b.totalCoinsEarned || 0) - (a.totalCoinsEarned || 0)).map((e) => {
                                const isPlayer = e.type === 'PLAYER';
                                const color = isPlayer ? (user?.avatarColor || '#3b82f6') : (e.avatarColor || '#ef4444');
                                return (
@@ -534,7 +558,7 @@ const GameView: React.FC = () => {
                                            <div className="flex flex-col min-w-0">
                                                <span className={`text-[10px] md:text-[11px] font-bold truncate leading-tight ${isPlayer ? 'text-white' : 'text-slate-400'}`}>{isPlayer ? (user?.nickname || 'YOU') : e.id.toUpperCase()}</span>
                                                <div className="flex gap-0.5 mt-0.5">
-                                                   {Array.from({length: UPGRADE_LOCK_QUEUE_SIZE}).map((_, i) => (
+                                                   {Array.from({length: queueSize}).map((_, i) => (
                                                        <div key={i} className={`w-1 h-1 rounded-full ${e.recentUpgrades.length > i ? 'bg-emerald-500' : 'bg-slate-800'}`} />
                                                    ))}
                                                </div>
@@ -582,8 +606,8 @@ const GameView: React.FC = () => {
               {activeTab === 'LOGS' && (
                   <div ref={logsContainerRef} className="flex flex-col gap-1.5">
                      {messageLog.map((msg, idx) => (
-                        <div key={`${msg}-${idx}`} className="bg-slate-800/50 border-l-2 border-cyan-500/50 px-2 py-1.5 text-[10px] font-mono text-cyan-100/90 rounded-r-md">
-                          {msg}
+                        <div key={`${typeof msg === 'string' ? msg : JSON.stringify(msg)}-${idx}`} className="bg-slate-800/50 border-l-2 border-cyan-500/50 px-2 py-1.5 text-[10px] font-mono text-cyan-100/90 rounded-r-md">
+                          {typeof msg === 'string' ? msg : JSON.stringify(msg)}
                         </div>
                      ))}
                   </div>
@@ -591,7 +615,7 @@ const GameView: React.FC = () => {
               {activeTab === 'BOTS' && (
                   <div ref={botLogsContainerRef} className="flex flex-col gap-2">
                      {botActivityLog.map((log, idx) => {
-                         const color = bots.find(b => b.id === log.botId)?.avatarColor || '#64748b';
+                         const color = safeBots.find(b => b.id === log.botId)?.avatarColor || '#64748b';
                          return (
                             <div key={idx} className="bg-slate-900/80 border border-slate-700 p-2 rounded-lg">
                                 <div className="flex justify-between items-center mb-1">

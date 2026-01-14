@@ -1,5 +1,7 @@
 
 
+
+
 import { System } from './System';
 import { GameState, GameEvent, EntityType, LeaderboardEntry, SessionState } from '../../types';
 import { WorldIndex } from '../WorldIndex';
@@ -11,13 +13,13 @@ export class VictorySystem implements System {
         return;
     }
 
-    const { type, target } = state.winCondition;
+    const { targetLevel, targetCoins } = state.winCondition;
     let gameOver = false;
     let isVictory = false;
     
     // Check Player Win
-    const pWin = (type === 'WEALTH' && state.player.totalCoinsEarned >= target) ||
-                 (type === 'DOMINATION' && state.player.playerLevel >= target);
+    // Composite Condition: Must have BOTH Level AND Coins
+    const pWin = (state.player.playerLevel >= targetLevel) && (state.player.totalCoinsEarned >= targetCoins);
     
     if (pWin) {
         state.gameStatus = 'VICTORY';
@@ -28,10 +30,9 @@ export class VictorySystem implements System {
         gameOver = true;
         isVictory = true;
     } else {
-        // Check Bot Win only if player hasn't won
+        // Check Bot Win
         const bWin = state.bots.some(b => 
-           (type === 'WEALTH' && b.totalCoinsEarned >= target) ||
-           (type === 'DOMINATION' && b.playerLevel >= target)
+           (b.playerLevel >= targetLevel) && (b.totalCoinsEarned >= targetCoins)
         );
 
         if (bWin) {
@@ -44,22 +45,18 @@ export class VictorySystem implements System {
         }
     }
     
-    // If game ended, emit an event for the store to handle the leaderboard update.
-    // This decouples engine state from persistent UI state.
     if (gameOver) {
-        const newEntry: LeaderboardEntry = {
-            nickname: 'Player', // Nickname will be sourced from UI state by the store
-            avatarColor: '#3b82f6', // Placeholder
-            avatarIcon: 'user', // Placeholder
+        const statsEntry: Partial<LeaderboardEntry> = {
             maxCoins: state.player.totalCoinsEarned,
             maxLevel: state.player.playerLevel,
+            difficulty: state.difficulty,
             timestamp: Date.now()
         };
         events.push(GameEventFactory.create(
             'LEADERBOARD_UPDATE', 
-            'Player score submitted', 
+            'Stats submitted', 
             state.player.id, 
-            { entry: newEntry }
+            { entry: statsEntry }
         ));
     }
   }

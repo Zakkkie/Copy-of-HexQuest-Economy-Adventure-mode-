@@ -1,4 +1,5 @@
 
+
 # HexQuest Economy
 
 **HexQuest Economy** is a strategic hexagonal exploration game where economic management is as crucial as territorial expansion. Compete against AI Sentinels, manage your resources (Coins & Moves), and master the upgrade cycle to dominate the procedural world.
@@ -33,10 +34,24 @@ You are a Commander tasked with expanding into a new sector. The world is infini
     *   Hostile bots inhabit the world. They expand, gather resources, and build complex structures obeying the same rules as you.
     *   Collision with a Sentinel halts your movement.
 
-### Win Conditions
-Configurable at the start of a session:
-1.  **Wealth**: Accumulate a specific amount of Coins.
-2.  **Domination**: Reach a specific high Level (Rank).
+### Mission Configuration
+
+Before deploying, you can configure your mission parameters:
+
+#### 1. Objective Tiers
+Select the scope of your operation. Winning requires achieving **BOTH** a specific Rank and a specific wealth target.
+*   **Sector Patrol**: Reach **L5** & Earn **250 Credits**.
+*   **Regional Command**: Reach **L7** & Earn **500 Credits**.
+*   **Global Domination**: Reach **L10** & Earn **1000 Credits**.
+
+#### 2. Difficulty Levels
+Determines the strictness of the **Cycle Lock**.
+*   **Cadet (Easy)**: Queue Size **1**. You can alternate between just 2 hexes.
+*   **Veteran (Medium)**: Queue Size **2**. Requires a 3-hex rotation loop.
+*   **Elite (Hard)**: Queue Size **3**. Requires a complex 4-hex rotation strategy.
+
+#### 3. Threat Density
+Adjust the number of AI Sentinels (1-3) present in the sector.
 
 ---
 
@@ -102,4 +117,4 @@ To create a standalone executable (`.exe`, `.dmg`, or `.AppImage`) for distribut
 
 ---
 
-*HexQuest Economy v2.1*
+*HexQuest Economy v3.0*

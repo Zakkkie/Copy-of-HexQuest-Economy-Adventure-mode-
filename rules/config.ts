@@ -1,12 +1,14 @@
 
+
+
+
 // Game Configuration and Constants
 
 export const GAME_CONFIG = {
   HEX_SIZE: 35,
   INITIAL_MOVES: 0,
   INITIAL_COINS: 0,
-  EXCHANGE_RATE_COINS_PER_MOVE: 2,
-  UPGRADE_LOCK_QUEUE_SIZE: 3,
+  EXCHANGE_RATE_COINS_PER_MOVE: 5,
   BOT_ACTION_INTERVAL_MS: 1000,
   
   LEVELS: {
@@ -29,9 +31,22 @@ export const GAME_CONFIG = {
   }
 };
 
+export const DIFFICULTY_SETTINGS = {
+  EASY: { queueSize: 1 },
+  MEDIUM: { queueSize: 2 },
+  HARD: { queueSize: 3 }
+};
+
+// Resource & Computation Guards
+export const SAFETY_CONFIG = {
+  MAX_LOG_SIZE: 50,             // Keep state small for fast cloning/rendering
+  MAX_PATH_LENGTH: 20,          // Prevent cross-map path calculations
+  MAX_SEARCH_ITERATIONS: 1000,  // Prevent A* from freezing the thread
+  MAX_MOVEMENT_QUEUE: 25        // Prevent infinite move loops
+};
+
 // Re-export specific constants for ease of use in UI components
 export const HEX_SIZE = GAME_CONFIG.HEX_SIZE;
-export const UPGRADE_LOCK_QUEUE_SIZE = GAME_CONFIG.UPGRADE_LOCK_QUEUE_SIZE;
 export const EXCHANGE_RATE_COINS_PER_MOVE = GAME_CONFIG.EXCHANGE_RATE_COINS_PER_MOVE;
 
 export const getLevelConfig = (level: number) => {

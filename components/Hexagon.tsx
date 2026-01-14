@@ -224,7 +224,7 @@ interface SmartHexagonProps {
 }
 
 const SmartHexagon: React.FC<SmartHexagonProps> = React.memo((props) => {
-  const hex = useGameStore(state => state.engine?.state.grid[props.id]);
+  const hex = useGameStore(state => state.session?.grid[props.id]);
   if (!hex) return null;
   return <HexagonVisual hex={hex} {...props} />;
 });

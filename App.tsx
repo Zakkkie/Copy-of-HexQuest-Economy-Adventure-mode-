@@ -10,7 +10,7 @@ import Background from './components/Background.tsx';
 const App: React.FC = () => {
   // Use selectors to avoid re-rendering App on every single state change
   const uiState = useGameStore(state => state.uiState);
-  const sessionId = useGameStore(state => state.engine?.state.sessionId);
+  const sessionId = useGameStore(state => state.session?.sessionId);
 
   return (
     <div className="relative w-screen h-screen bg-slate-950 overflow-hidden font-sans select-none">
