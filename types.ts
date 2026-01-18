@@ -4,7 +4,11 @@
 
 
 
-export type HexCoord = { q: number; r: number; upgrade?: boolean };
+
+
+
+
+export type HexCoord = { q: number; r: number; upgrade?: boolean; intent?: 'UPGRADE' | 'RECOVER' };
 
 // Read-only view of a Hex for the Bot (Architecture Requirement)
 export interface HexView {
@@ -40,7 +44,7 @@ export enum EntityState {
   LOCKED = 'LOCKED'
 }
 
-export type BotGoalType = 'EXPAND' | 'DEFEND' | 'ATTACK' | 'GROWTH' | 'IDLE' | 'PREPARE_CYCLE';
+export type BotGoalType = 'EXPAND' | 'DEFEND' | 'ATTACK' | 'GROWTH' | 'IDLE' | 'PREPARE_CYCLE' | 'BUILD_SUPPORT' | 'GATHER_RESOURCES';
 
 export interface BotGoal {
   type: BotGoalType;
@@ -54,6 +58,7 @@ export interface BotGoal {
 export interface BotMemory {
   lastPlayerPos: HexCoord | null;
   currentGoal: BotGoal | null;
+  masterGoalId?: string | null; // The high-level hex we ultimately want to upgrade
   stuckCounter: number;
   lastActionFailed?: boolean;
   failReason?: string;
@@ -77,7 +82,10 @@ export interface Entity {
   
   memory?: BotMemory; 
   avatarColor?: string; 
-  attackTokens?: number; 
+  attackTokens?: number;
+  
+  // Track if "Recovery" ability was used on the current hex
+  recoveredCurrentHex?: boolean; 
 }
 
 export type GameEventType = 
@@ -90,7 +98,8 @@ export type GameEventType =
   | 'GROWTH_TICK'
   | 'ACTION_DENIED'
   | 'BOT_LOG'
-  | 'LEADERBOARD_UPDATE';
+  | 'LEADERBOARD_UPDATE'
+  | 'RECOVERY_USED'; // Added event type
 
 export interface GameEvent {
   type: GameEventType;
@@ -105,6 +114,14 @@ export interface BotLogEntry {
   action: string;
   reason: string;
   target?: string;
+  timestamp: number;
+}
+
+export interface LogEntry {
+  id: string;
+  text: string;
+  type: 'INFO' | 'WARN' | 'ERROR' | 'SUCCESS' | 'DEBUG';
+  source: string;
   timestamp: number;
 }
 
@@ -165,7 +182,7 @@ export interface SessionState {
   bots: Entity[]; 
   currentTurn: number;
   gameStatus: 'PLAYING' | 'VICTORY' | 'DEFEAT';
-  messageLog: string[];
+  messageLog: LogEntry[]; // UPDATED: Structured log
   botActivityLog: BotLogEntry[];
   lastBotActionTime: number; 
   isPlayerGrowing: boolean; 
@@ -187,12 +204,12 @@ export interface GameState {
 }
 
 export type MoveAction = { type: 'MOVE'; path: { q: number; r: number }[]; stateVersion?: number };
-export type UpgradeAction = { type: 'UPGRADE'; coord: { q: number; r: number }; upgradeType?: 'DEFAULT' | 'BARRIER' | 'MINE' | 'CAPITAL'; stateVersion?: number };
+export type UpgradeAction = { type: 'UPGRADE'; coord: { q: number; r: number }; intent?: 'UPGRADE' | 'RECOVER'; upgradeType?: 'DEFAULT' | 'BARRIER' | 'MINE' | 'CAPITAL'; stateVersion?: number };
 export type WaitAction = { type: 'WAIT'; stateVersion?: number };
 export type RechargeAction = { type: 'RECHARGE_MOVE'; stateVersion?: number };
 
 // FIX: Added missing BotAction type, which is a subset of actions the AI can take.
-export type BotAction = MoveAction | UpgradeAction | WaitAction;
+export type BotAction = MoveAction | UpgradeAction | WaitAction | RechargeAction;
 export type GameAction = BotAction | RechargeAction;
 
 // Validates result of logic before execution (Architecture Requirement)

@@ -1,4 +1,3 @@
-
 import { Hex, HexCoord } from '../types';
 import { GAME_CONFIG, getLevelConfig, SAFETY_CONFIG } from '../rules/config';
 
@@ -33,8 +32,6 @@ export const calculateReward = (level: number) => {
 };
 
 export const getSecondsToGrow = (level: number) => getLevelConfig(level).growthTime;
-
-export { checkGrowthCondition } from '../rules/growth';
 
 /**
  * Min-Heap Priority Queue implementation for O(log n) retrievals

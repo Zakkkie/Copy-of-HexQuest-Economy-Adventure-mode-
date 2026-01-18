@@ -2,6 +2,8 @@
 
 
 
+
+
 import { GameState, GameAction, EntityType, EntityState, ValidationResult, SessionState } from '../types';
 import { WorldIndex } from './WorldIndex';
 import { getHexKey } from '../services/hexUtils';
@@ -31,6 +33,15 @@ export class ActionProcessor {
             const key = getHexKey(action.coord.q, action.coord.r);
             const hex = state.grid[key];
             if (!hex) return { ok: false, reason: 'Invalid Coord' };
+
+            // Special Case: RECOVER intent on owned hex is always allowed (skips growth rules)
+            if (action.intent === 'RECOVER') {
+                if (hex.ownerId === actor.id) {
+                    return { ok: true };
+                } else {
+                    return { ok: false, reason: 'Cannot recover neutral/hostile hex' };
+                }
+            }
 
             const neighbors = index.getValidNeighbors(action.coord.q, action.coord.r).map(h => ({q:h.q, r:h.r}));
             const occupied = index.getOccupiedHexesList();
@@ -129,7 +140,7 @@ export class ActionProcessor {
         break;
       }
       case 'UPGRADE':
-        actor.movementQueue = [{ q: action.coord.q, r: action.coord.r, upgrade: true }];
+        actor.movementQueue = [{ q: action.coord.q, r: action.coord.r, upgrade: true, intent: action.intent }];
         break;
       case 'RECHARGE_MOVE':
         actor.coins -= GAME_CONFIG.EXCHANGE_RATE_COINS_PER_MOVE;

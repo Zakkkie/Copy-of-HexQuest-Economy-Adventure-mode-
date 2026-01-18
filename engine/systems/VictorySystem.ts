@@ -1,7 +1,3 @@
-
-
-
-
 import { System } from './System';
 import { GameState, GameEvent, EntityType, LeaderboardEntry, SessionState } from '../../types';
 import { WorldIndex } from '../WorldIndex';
@@ -24,8 +20,15 @@ export class VictorySystem implements System {
     if (pWin) {
         state.gameStatus = 'VICTORY';
         const msg = 'Mission Accomplished';
-        state.messageLog.unshift(`[SYSTEM] ${msg}`);
-        if (state.messageLog.length > 100) state.messageLog.pop();
+        
+        state.messageLog.unshift({
+            id: `win-${Date.now()}`,
+            text: msg,
+            type: 'SUCCESS',
+            source: 'SYSTEM',
+            timestamp: Date.now()
+        });
+
         events.push(GameEventFactory.create('VICTORY', msg));
         gameOver = true;
         isVictory = true;
@@ -38,8 +41,15 @@ export class VictorySystem implements System {
         if (bWin) {
             state.gameStatus = 'DEFEAT';
             const msg = 'Mission Failed: Rival completed objective';
-            state.messageLog.unshift(`[SYSTEM] ${msg}`);
-            if (state.messageLog.length > 100) state.messageLog.pop();
+            
+            state.messageLog.unshift({
+                id: `lose-${Date.now()}`,
+                text: msg,
+                type: 'ERROR',
+                source: 'SYSTEM',
+                timestamp: Date.now()
+            });
+            
             events.push(GameEventFactory.create('DEFEAT', msg));
             gameOver = true;
         }

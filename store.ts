@@ -2,8 +2,12 @@
 
 
 
+
+
+
+
 import { create } from 'zustand';
-import { GameState, Entity, Hex, EntityType, UIState, WinCondition, LeaderboardEntry, EntityState, MoveAction, RechargeAction, SessionState } from './types.ts';
+import { GameState, Entity, Hex, EntityType, UIState, WinCondition, LeaderboardEntry, EntityState, MoveAction, RechargeAction, SessionState, LogEntry } from './types.ts';
 import { GAME_CONFIG } from './rules/config.ts';
 import { getHexKey, getNeighbors, findPath } from './services/hexUtils.ts';
 import { GameEngine } from './engine/GameEngine.ts';
@@ -73,10 +77,19 @@ const createInitialSessionData = (winCondition: WinCondition): SessionState => {
       playerLevel: 0, coins: GAME_CONFIG.INITIAL_COINS, moves: GAME_CONFIG.INITIAL_MOVES,
       totalCoinsEarned: 0, recentUpgrades: [], movementQueue: [],
       memory: { lastPlayerPos: null, currentGoal: null, stuckCounter: 0 },
-      avatarColor: BOT_PALETTE[i % BOT_PALETTE.length]
+      avatarColor: BOT_PALETTE[i % BOT_PALETTE.length],
+      recoveredCurrentHex: false
     });
   }
   
+  const initialLog: LogEntry = {
+    id: 'init-0',
+    text: 'System Online. Mission Initialized.',
+    type: 'INFO',
+    source: 'SYSTEM',
+    timestamp: Date.now()
+  };
+
   return {
     stateVersion: 0,
     sessionId: Math.random().toString(36).substring(2, 15),
@@ -88,10 +101,11 @@ const createInitialSessionData = (winCondition: WinCondition): SessionState => {
       id: 'player-1', type: EntityType.PLAYER, state: EntityState.IDLE, q: 0, r: 0,
       playerLevel: 0, coins: GAME_CONFIG.INITIAL_COINS, moves: GAME_CONFIG.INITIAL_MOVES,
       totalCoinsEarned: 0, recentUpgrades: [], movementQueue: [],
+      recoveredCurrentHex: false
     },
     bots,
     currentTurn: 0,
-    messageLog: ['System Online.'],
+    messageLog: [initialLog],
     botActivityLog: [], 
     gameStatus: 'PLAYING',
     lastBotActionTime: Date.now(),
@@ -153,6 +167,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
       if (session.player.state === EntityState.MOVING) return;
       
       const isCurrentlyGrowing = session.isPlayerGrowing;
+      // Note: Logic allows toggling ON 'RECOVER' even if already growing, to switch modes if implemented,
+      // but primarily toggles on/off.
       engine.setPlayerIntent(!isCurrentlyGrowing, isCurrentlyGrowing ? null : intent);
       set({ session: engine.state });
   },
@@ -238,35 +254,62 @@ export const useGameStore = create<GameStore>((set, get) => ({
       let leaderboardUpdated = false;
       const currentLeaderboard = [...get().leaderboard];
       
+      // PROCESS EVENTS
       if (result.events.length > 0) {
+          
+          // 1. Error Handling & Toasts
           const error = result.events.find(e => e.type === 'ACTION_DENIED' || e.type === 'ERROR');
-          if (error && error.entityId === engine.state.player.id) {
-              newToast = { message: error.message || 'Error', type: 'error', timestamp: Date.now() };
+          if (error) {
+              // Push error to the console log if it isn't already there
+              // Note: Systems might have already pushed to messageLog, but 'ERROR' events 
+              // from engine-level checks (like AiSystem failure) might be raw.
+              // We'll trust that the engine state now contains the logs, but we still trigger UI effects.
+              
+              if (error.entityId === engine.state.player.id) {
+                 newToast = { message: error.message || 'Error', type: 'error', timestamp: Date.now() };
+              }
+
+              // Also ensure it is logged if it came from system level not handling it
+              // (This is a safety catch)
+              const alreadyLogged = result.state.messageLog.some(l => l.timestamp === error.timestamp && l.text === error.message);
+              if (!alreadyLogged && error.message) {
+                  result.state.messageLog.unshift({
+                      id: `err-${Date.now()}-${Math.random()}`,
+                      text: error.message,
+                      type: 'ERROR',
+                      source: error.entityId || 'SYSTEM',
+                      timestamp: Date.now()
+                  });
+              }
+          }
+          
+          // 2. Recovery Toast
+          const recovery = result.events.find(e => e.type === 'RECOVERY_USED' && e.entityId === engine.state.player.id);
+          if (recovery) {
+             newToast = { message: recovery.message || 'Supplies Recovered', type: 'success', timestamp: Date.now() };
           }
 
+          // 3. Leaderboard
           const leaderboardEvent = result.events.find(e => e.type === 'LEADERBOARD_UPDATE');
           if (leaderboardEvent && leaderboardEvent.data?.entry) {
               const engineStats = leaderboardEvent.data.entry as LeaderboardEntry;
               const user = get().user;
               
-              // MERGE Engine Stats with User Profile to create a complete entry
               const newEntry: LeaderboardEntry = {
                   nickname: user?.nickname || 'Unknown Commander',
                   avatarColor: user?.avatarColor || '#3b82f6',
                   avatarIcon: user?.avatarIcon || 'user',
                   maxCoins: engineStats.maxCoins,
                   maxLevel: engineStats.maxLevel,
-                  difficulty: engineStats.difficulty || 'MEDIUM', // Ensure difficulty is saved
+                  difficulty: engineStats.difficulty || 'MEDIUM', 
                   timestamp: Date.now()
               };
 
-              // Logic: Update existing record for this user if improved, or add new
               const existingIndex = currentLeaderboard.findIndex(e => e.nickname === newEntry.nickname && e.difficulty === newEntry.difficulty);
               let shouldUpdate = false;
 
               if (existingIndex > -1) {
                   const existing = currentLeaderboard[existingIndex];
-                  // Scoring: Weighted sum based on Tier targets roughly
                   const existingScore = existing.maxCoins + existing.maxLevel * 100;
                   const newScore = newEntry.maxCoins + newEntry.maxLevel * 100;
                   
@@ -286,8 +329,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
                       return scoreB - scoreA;
                   });
                   leaderboardUpdated = true;
-                  
-                  // PERSIST
                   localStorage.setItem(LEADERBOARD_STORAGE_KEY, JSON.stringify(currentLeaderboard));
               }
           }

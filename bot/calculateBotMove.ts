@@ -1,24 +1,22 @@
-
-
-
-import { Entity, Hex, HexCoord, WinCondition, BotAction, Difficulty } from '../types';
+import { Entity, Hex, HexCoord, WinCondition, BotAction, Difficulty, BotMemory } from '../types';
 import { getLevelConfig, GAME_CONFIG, DIFFICULTY_SETTINGS } from '../rules/config';
 import { getHexKey, cubeDistance, findPath, getNeighbors } from '../services/hexUtils';
 import { checkGrowthCondition } from '../rules/growth';
 import { WorldIndex } from '../engine/WorldIndex';
 
-const WEIGHTS = {
-  DISTANCE: 2.0,
-  INCOME: 1.5,
-  EXPANSION: 2.5,
-  RANK_UP: 6.0
-};
-
 export interface AiResult {
     action: BotAction | null;
     debug: string;
+    memory: BotMemory;
 }
 
+/**
+ * AI V12: "The Survivor"
+ * 
+ * Improvements:
+ * - Anti-Stuck Mechanism: Detects repeated failures/waits and forces a random move (or suicide attack) to break loops.
+ * - Self-Aware Idleness: Increments stuckCounter internally when deciding to WAIT due to lack of options.
+ */
 export const calculateBotMove = (
   bot: Entity, 
   grid: Record<string, Hex>, 
@@ -32,194 +30,359 @@ export const calculateBotMove = (
 ): AiResult => {
   
   const currentHexKey = getHexKey(bot.q, bot.r);
-  const currentHex = grid[currentHexKey];
-  const neighbors = getNeighbors(bot.q, bot.r);
+  const queueSize = DIFFICULTY_SETTINGS[difficulty]?.queueSize || 3;
   const otherUnitObstacles = obstacles.filter(o => o.q !== bot.q || o.r !== bot.r);
   
-  // Resolve Queue Size
-  const queueSize = DIFFICULTY_SETTINGS[difficulty]?.queueSize || 3;
+  // Clone memory
+  const nextMemory: BotMemory = bot.memory ? { ...bot.memory } : {
+      lastPlayerPos: null,
+      currentGoal: null,
+      masterGoalId: null,
+      stuckCounter: 0
+  };
 
-  // 1. Memory Initialization
-  if (!bot.memory) {
-    bot.memory = { lastPlayerPos: null, currentGoal: null, stuckCounter: 0 };
-  }
+  // === 0. PANIC MODE (Anti-Stuck) ===
+  // If we have failed or waited 3 times in a row, force a move to break the loop.
+  if (nextMemory.stuckCounter >= 3) {
+      const neighbors = getNeighbors(bot.q, bot.r);
+      
+      // Find valid escape routes (exists, rank ok, not blocked)
+      const escapeRoutes = neighbors.filter(n => {
+          const k = getHexKey(n.q, n.r);
+          const h = grid[k];
+          if (!h) return false;
+          if (h.maxLevel > bot.playerLevel) return false;
+          if (otherUnitObstacles.some(o => o.q === n.q && o.r === n.r)) return false;
+          return true;
+      });
 
-  // --- CYCLE MANAGEMENT CHECK ---
-  // If we are low on cycle upgrades (L1 sectors), force EXPAND to prevent lock
-  const cycleHealth = bot.recentUpgrades.length;
-  const needsCycle = cycleHealth < queueSize;
-
-  // --- DEADLOCK RESOLUTION ---
-  if (bot.memory.lastActionFailed) {
-      if (bot.memory.currentGoal?.type === 'GROWTH') {
-           // If growth failed, switch to PREPARE_CYCLE to flush the queue
-           bot.memory.currentGoal = {
-               type: 'PREPARE_CYCLE',
-               priority: 5,
-               expiresAt: Date.now() + 10000
-           };
-      } else {
-          bot.memory.currentGoal = null;
-      }
-  }
-
-  // --- 1. IMMEDIATE ACTION (If safe) ---
-  // If standing on a hex that can be upgraded AND we are not in a failed state for it
-  if (currentHex && currentHex.progress > 0 && !bot.memory.lastActionFailed) {
-     const check = checkGrowthCondition(currentHex, bot, neighbors, grid, otherUnitObstacles, queueSize);
-     if (check.canGrow) {
-        return { 
-            action: { type: 'UPGRADE', coord: { q: bot.q, r: bot.r }, stateVersion },
-            debug: `Finishing Job @ ${currentHex.maxLevel}`
-        };
-     }
-  }
-
-  // --- 2. GOAL MANAGEMENT ---
-  let goal = bot.memory.currentGoal;
-  const now = Date.now();
-  
-  if (goal) {
-     if (now > goal.expiresAt) goal = null;
-     else if (goal.targetHexId) {
-         const hex = grid[goal.targetHexId];
-         // Re-validate goal validity
-         if (!hex) goal = null;
-         else if (goal.type === 'GROWTH' && hex.maxLevel > bot.playerLevel) goal = null;
-         else if (goal.type === 'EXPAND' && index.isOccupied(hex.q, hex.r)) goal = null;
-         else if (goal.targetHexId === currentHexKey && goal.type === 'EXPAND') goal = null; 
-     }
-  }
-
-  // --- 3. GOAL SELECTION (If needed) ---
-  if (!goal) {
-     // Performance Fix: Limit candidate pool via Index
-     const searchRange = bot.memory.lastActionFailed ? 5 : 12; 
-     const candidates = index.getHexesInRange({q: bot.q, r: bot.r}, searchRange).filter(h => {
-        // Basic filtering
-        if (index.isOccupied(h.q, h.r) && h.id !== currentHexKey) return false;
-        
-        // Check Reserved (from other bots in same tick)
-        if (reservedHexKeys && reservedHexKeys.has(h.id) && h.id !== currentHexKey) return false;
-
-        // Strategy filtering
-        if (needsCycle || bot.memory?.currentGoal?.type === 'PREPARE_CYCLE') {
-            return h.maxLevel <= 1; // Prioritize easy/empty sectors
-        }
-        
-        return true;
-     });
-
-     let bestCandidate: Hex | null = null;
-     let bestScore = -Infinity;
-
-     // Utility Scoring
-     for (const h of candidates) {
-        let score = 0;
-        const d = cubeDistance(bot, h);
-        
-        // Heuristic Scoring
-        score -= d * WEIGHTS.DISTANCE;
-
-        // Jitter to break symmetry
-        score += Math.random() * 2.0; 
-
-        const targetNeighbors = getNeighbors(h.q, h.r);
-        const growCheck = checkGrowthCondition(h, bot, targetNeighbors, grid, otherUnitObstacles, queueSize);
-
-        if (growCheck.canGrow) {
-           const targetLevel = h.currentLevel + 1;
-           const cfg = getLevelConfig(targetLevel);
-           
-           score += (cfg.income * WEIGHTS.INCOME);
-           
-           if (targetLevel > h.maxLevel) score += 20 * WEIGHTS.EXPANSION;
-           
-           if (targetLevel > bot.playerLevel && targetLevel > h.maxLevel) score += 100 * WEIGHTS.RANK_UP;
-           
-           // Critical: If we need cycle points, massive bonus for L1
-           if (needsCycle && targetLevel === 1) {
-               score += 500; 
-           }
-
-        } else {
-           score -= 1000; // Unusable hex
-        }
-
-        if (score > bestScore) {
-           bestScore = score;
-           bestCandidate = h;
-        }
-     }
-
-     if (bestCandidate && bestScore > -500) {
-        bot.memory.currentGoal = {
-           type: bestCandidate.maxLevel === 0 ? 'EXPAND' : 'GROWTH',
-           targetHexId: bestCandidate.id,
-           targetQ: bestCandidate.q,
-           targetR: bestCandidate.r,
-           priority: 1,
-           expiresAt: now + 15000 
-        };
-        goal = bot.memory.currentGoal;
-     }
-  }
-
-  // --- 4. EXECUTION ---
-  if (goal && goal.targetHexId) {
-      const target = grid[goal.targetHexId];
-      if (!target) return { action: { type: 'WAIT', stateVersion }, debug: 'Target Vanished' };
-
-      // A. If at target
-      if (target.id === currentHexKey) {
-           const check = checkGrowthCondition(target, bot, neighbors, grid, otherUnitObstacles, queueSize);
-           if (check.canGrow) {
-                return { 
-                    action: { type: 'UPGRADE', coord: { q: bot.q, r: bot.r }, stateVersion },
-                    debug: `Executing ${goal.type} @ L${target.currentLevel}`
-                };
-           } else {
-               // Goal stalled
-               bot.memory.currentGoal = null;
-               bot.memory.lastActionFailed = true; 
-               return { action: { type: 'WAIT', stateVersion }, debug: `Goal Stalled: ${check.reason}` };
-           }
-      }
-
-      // B. Move towards target
-      const path = findPath({q: bot.q, r: bot.r}, {q: target.q, r: target.r}, grid, bot.playerLevel, otherUnitObstacles);
-      if (path && path.length > 0) {
-          let requiredMoves = 0;
-          for (const step of path) {
-              const h = grid[getHexKey(step.q, step.r)];
-              requiredMoves += (h && h.maxLevel >= 2) ? h.maxLevel : 1;
-          }
-          const available = bot.moves + (bot.coins / GAME_CONFIG.EXCHANGE_RATE_COINS_PER_MOVE);
+      if (escapeRoutes.length > 0) {
+          // Priority: Attack Player if adjacent (Suicide Run)
+          const attackMove = escapeRoutes.find(n => n.q === player.q && n.r === player.r);
+          const target = attackMove || escapeRoutes[Math.floor(Math.random() * escapeRoutes.length)];
           
-          if (available >= requiredMoves) {
-              return { 
-                  action: { type: 'MOVE', path, stateVersion }, 
-                  debug: `Moving to ${goal.type} (${target.q},${target.r})` 
+          return {
+              action: { type: 'MOVE', path: [target], stateVersion },
+              debug: attackMove ? 'PANIC: ATTACK!' : 'PANIC: WANDER',
+              memory: { ...nextMemory, stuckCounter: 0, masterGoalId: null }
+          };
+      }
+      // If we are completely trapped and stuck, we just have to wait, but reset counter to avoid infinite processing overhead
+      return { 
+          action: { type: 'WAIT', stateVersion }, 
+          debug: 'PANIC: TRAPPED', 
+          memory: { ...nextMemory, stuckCounter: 0 } 
+      };
+  }
+
+  // --- Helpers ---
+
+  const calculatePathCost = (path: HexCoord[]) => {
+      let moves = 0;
+      for (const p of path) {
+           const h = grid[getHexKey(p.q, p.r)];
+           const cost = (h && h.maxLevel >= 2) ? h.maxLevel : 1;
+           moves += cost;
+      }
+      const deficit = Math.max(0, moves - bot.moves);
+      const coins = deficit * GAME_CONFIG.EXCHANGE_RATE_COINS_PER_MOVE;
+      return { moves, coins };
+  };
+
+  const getRecoveryFallback = (reason: string): AiResult => {
+       // 1. If we are on an owned hex that needs recovery, do it.
+       const curHex = grid[currentHexKey];
+       if (curHex && curHex.ownerId === bot.id && !bot.recoveredCurrentHex) {
+            return {
+                action: { type: 'UPGRADE', coord: {q:bot.q, r:bot.r}, intent: 'RECOVER', stateVersion },
+                debug: `Recovering Here (${reason})`,
+                memory: { ...nextMemory, stuckCounter: 0 }
+            };
+       }
+
+       // 2. Find nearest farmable hex
+       const candidates = index.getHexesInRange({q:bot.q, r:bot.r}, 15)
+          .filter(h => h.ownerId === bot.id && (h.id !== currentHexKey || !bot.recoveredCurrentHex))
+          .filter(h => !reservedHexKeys?.has(h.id));
+       
+       candidates.sort((a,b) => {
+           const distA = cubeDistance(bot, a);
+           const distB = cubeDistance(bot, b);
+           if (Math.abs(distA - distB) < 2) return b.maxLevel - a.maxLevel;
+           return distA - distB;
+       });
+       
+       const best = candidates[0];
+       
+       // FAILURE CASE 1: No farms available
+       if (!best) {
+           return { 
+               action: { type: 'WAIT', stateVersion }, 
+               debug: 'Bankrupt (No Farms)', 
+               memory: { ...nextMemory, stuckCounter: nextMemory.stuckCounter + 1 } 
+           };
+       }
+
+       // Move to farm
+       const path = findPath({q:bot.q, r:bot.r}, {q:best.q, r:best.r}, grid, bot.playerLevel, otherUnitObstacles);
+       
+       // FAILURE CASE 2: No path
+       if (!path) {
+           return { 
+               action: { type: 'WAIT', stateVersion }, 
+               debug: 'Trapped', 
+               memory: { ...nextMemory, stuckCounter: nextMemory.stuckCounter + 1 } 
+           };
+       }
+       
+       const cost = calculatePathCost(path);
+       if (bot.coins >= cost.coins) {
+           return { 
+               action: { type: 'MOVE', path, stateVersion }, 
+               debug: `Moving to Farm (${reason})`, 
+               memory: { ...nextMemory, stuckCounter: 0 } 
+           };
+       }
+       
+       // FAILURE CASE 3: Too poor to move
+       return { 
+           action: { type: 'WAIT', stateVersion }, 
+           debug: 'Bankrupt & Stuck', 
+           memory: { ...nextMemory, stuckCounter: nextMemory.stuckCounter + 1 } 
+       };
+  };
+
+  // --- Core Evaluation Function ---
+  // Returns result if a valid move is found, null if this specific goal path is blocked/invalid
+  const evaluateGoal = (candidateMasterHex: Hex): AiResult | null => {
+      // 1. Validate Candidate
+      if (candidateMasterHex.maxLevel >= 99) return null;
+      if (candidateMasterHex.ownerId && candidateMasterHex.ownerId !== bot.id) return null; // We lost it
+      
+      let targetHex: Hex | null = null;
+      let strategy = 'IDLE';
+
+      // 2. Determine Strategy
+      if (!candidateMasterHex.ownerId) {
+          strategy = 'EXPAND_MASTER';
+          targetHex = candidateMasterHex;
+      } else {
+          const targetLevel = candidateMasterHex.currentLevel + 1;
+          
+          // Constraints
+          const rankOk = bot.playerLevel >= targetLevel - 1;
+          const inQueue = bot.recentUpgrades.includes(candidateMasterHex.id);
+          const queueFull = bot.recentUpgrades.length >= queueSize;
+          
+          const cycleOk = targetLevel === 1 || (queueFull && !inQueue);
+          
+          let supportOk = true;
+          if (targetLevel > 1) {
+              const neighbors = getNeighbors(candidateMasterHex.q, candidateMasterHex.r);
+              const validSupports = neighbors
+                 .map(n => grid[getHexKey(n.q, n.r)])
+                 .filter(h => h && h.maxLevel === candidateMasterHex.maxLevel);
+              if (validSupports.length < 2) supportOk = false;
+          }
+
+          if (!rankOk) strategy = 'GRIND_RANK';
+          else if (!cycleOk) strategy = 'FARM_CYCLE'; // Need to farm points (L0->L1)
+          else if (!supportOk) strategy = 'BUILD_SUPPORT';
+          else {
+              strategy = 'EXECUTE_MASTER';
+              targetHex = candidateMasterHex;
+          }
+      }
+
+      // 3. Sub-Goal Resolution
+      if (strategy === 'GRIND_RANK') {
+          const grindCandidates = index.getHexesInRange({q:bot.q, r:bot.r}, 15)
+              .filter(h => h.ownerId === bot.id && h.id !== candidateMasterHex.id && h.maxLevel <= bot.playerLevel)
+              .sort((a,b) => b.maxLevel - a.maxLevel);
+          if (grindCandidates.length > 0) targetHex = grindCandidates[0];
+          else strategy = 'EXPAND_DEFAULT';
+      }
+
+      if (strategy === 'FARM_CYCLE' || strategy === 'EXPAND_DEFAULT') {
+           const empties = index.getHexesInRange({q:bot.q, r:bot.r}, 15)
+              .filter(h => !h.ownerId && h.maxLevel === 0 && !reservedHexKeys?.has(h.id));
+           
+           empties.sort((a,b) => {
+               const distA = cubeDistance(bot, a);
+               const distB = cubeDistance(bot, b);
+               if (Math.abs(distA - distB) < 3) {
+                   const nA = getNeighbors(a.q, a.r).filter(n => grid[getHexKey(n.q, n.r)]?.ownerId === bot.id).length;
+                   const nB = getNeighbors(b.q, b.r).filter(n => grid[getHexKey(n.q, n.r)]?.ownerId === bot.id).length;
+                   return nB - nA;
+               }
+               return distA - distB;
+           });
+           
+           if (empties.length > 0) {
+             targetHex = empties[0];
+           } else {
+             return null; 
+           }
+      }
+
+      if (strategy === 'BUILD_SUPPORT') {
+          const neighbors = getNeighbors(candidateMasterHex.q, candidateMasterHex.r);
+          const supportCandidates = neighbors.map(n => grid[getHexKey(n.q, n.r)])
+              .filter(h => h && h.maxLevel < candidateMasterHex.maxLevel && !reservedHexKeys?.has(h.id));
+          
+          supportCandidates.sort((a,b) => {
+              const oA = a.ownerId === bot.id ? 1 : 0;
+              const oB = b.ownerId === bot.id ? 1 : 0;
+              if (oA !== oB) return oB - oA;
+              return b.maxLevel - a.maxLevel;
+          });
+
+          if (supportCandidates.length > 0) targetHex = supportCandidates[0];
+          else return null; // Unsupportable
+      }
+
+      if (!targetHex) return null;
+
+      // 4. Execution Check
+      if (targetHex.id === currentHexKey) {
+          const nextLvl = targetHex.currentLevel + 1;
+          const cfg = getLevelConfig(nextLvl);
+          
+          if (bot.coins < cfg.cost) return null; 
+          
+          const occupied = index.getOccupiedHexesList();
+          const nbs = getNeighbors(bot.q, bot.r);
+          const check = checkGrowthCondition(targetHex, bot, nbs, grid, occupied, queueSize);
+          
+          if (check.canGrow) {
+              return {
+                  action: { type: 'UPGRADE', coord: {q:bot.q, r:bot.r}, intent: 'UPGRADE', stateVersion },
+                  debug: `${strategy} -> L${nextLvl}`,
+                  memory: { ...nextMemory, masterGoalId: candidateMasterHex.id, stuckCounter: 0 }
               };
           } else {
-              return { action: { type: 'WAIT', stateVersion }, debug: 'Saving resources' };
+               return null;
           }
-      } else {
-          bot.memory.currentGoal = null;
-          return { action: { type: 'WAIT', stateVersion }, debug: 'Path blocked' };
       }
+
+      // 5. Pathfinding
+      const path = findPath({q:bot.q, r:bot.r}, {q:targetHex.q, r:targetHex.r}, grid, bot.playerLevel, otherUnitObstacles);
+      if (!path) return null; // Path blocked
+
+      const travel = calculatePathCost(path);
+      
+      // === COST ANALYSIS ===
+      if (bot.coins >= travel.coins) {
+          // WEALTHY: Move normally
+          return {
+              action: { type: 'MOVE', path, stateVersion },
+              debug: `Move > ${strategy}`,
+              memory: { ...nextMemory, masterGoalId: candidateMasterHex.id, stuckCounter: 0 }
+          };
+      } else {
+          // POOR: Inchworm Strategy
+          // A. Priority: Recover on current hex to fund the journey
+          const curHex = grid[currentHexKey];
+          const canRecoverHere = curHex && curHex.ownerId === bot.id && !bot.recoveredCurrentHex;
+          
+          if (canRecoverHere) {
+               return {
+                    action: { type: 'UPGRADE', coord: {q:bot.q, r:bot.r}, intent: 'RECOVER', stateVersion },
+                    debug: `Fund Trip > ${strategy}`,
+                    memory: { ...nextMemory, masterGoalId: candidateMasterHex.id, stuckCounter: 0 }
+               };
+          }
+          
+          // B. If already recovered (or unable), try to move just 1 step closer
+          const nextStep = path[0];
+          const singleStepPath = [nextStep];
+          const stepCost = calculatePathCost(singleStepPath);
+          
+          if (bot.coins >= stepCost.coins) {
+               return {
+                   action: { type: 'MOVE', path: singleStepPath, stateVersion },
+                   debug: `Creep > ${strategy}`,
+                   memory: { ...nextMemory, masterGoalId: candidateMasterHex.id, stuckCounter: 0 }
+               };
+          }
+          
+          // C. Stuck: Can't afford full trip, can't recover here, can't even move 1 step.
+          // This will fall through to null, eventually hitting getRecoveryFallback which will log the stuck state.
+          return null;
+      }
+  };
+
+  // --- Main Logic ---
+
+  // 1. Try Existing Master Goal
+  if (nextMemory.masterGoalId) {
+      const existingMaster = grid[nextMemory.masterGoalId];
+      if (existingMaster) {
+          const result = evaluateGoal(existingMaster);
+          if (result) return result;
+      }
+      nextMemory.masterGoalId = null;
   }
 
-  // Fallback: Random Walk
-  if (!goal) {
-       const randomNeighbors = neighbors.filter(n => !index.isOccupied(n.q, n.r));
-       if (randomNeighbors.length > 0) {
-           const rnd = randomNeighbors[Math.floor(Math.random() * randomNeighbors.length)];
-           if (bot.moves > 5) {
-                return { action: { type: 'MOVE', path: [rnd], stateVersion }, debug: 'Wandering' };
-           }
-       }
+  // 2. Context Analysis for Scoring
+  const ownedHexes = index.getHexesInRange({q:bot.q, r:bot.r}, 100).filter(h => h.ownerId === bot.id);
+  const isEarlyGame = ownedHexes.length < 5;
+  const distToPlayer = cubeDistance(bot, player);
+  const isThreatened = distToPlayer < 8;
+
+  // 3. Generate New Candidates
+  const candidates = index.getHexesInRange({q:bot.q, r:bot.r}, 25);
+  const potentialGoals: { hex: Hex, score: number }[] = [];
+
+  for (const h of candidates) {
+      if (h.maxLevel >= 99) continue;
+      
+      const isBlocked = otherUnitObstacles.some(o => o.q === h.q && o.r === h.r);
+      if (isBlocked && h.id !== currentHexKey) continue;
+
+      let score = 100;
+      const dist = cubeDistance(bot, h);
+      score -= dist * 4;
+
+      const nextLvl = h.currentLevel + 1;
+      const config = getLevelConfig(nextLvl);
+
+      const affordabilty = (bot.coins - config.cost);
+      if (affordabilty < 0) score -= 50; 
+      else score += Math.min(20, affordabilty / 10);
+
+      const nbs = getNeighbors(h.q, h.r);
+      const ownedNeighborCount = nbs.filter(n => grid[getHexKey(n.q, n.r)]?.ownerId === bot.id).length;
+
+      if (h.ownerId === bot.id) {
+            score += 20; 
+            score += h.maxLevel * 10; 
+            if (bot.recentUpgrades.includes(h.id)) score -= 15;
+            if (isThreatened && cubeDistance(h, player) < 5) score += 40; 
+            if (bot.recentUpgrades.length >= queueSize) score += 20;
+
+      } else if (!h.ownerId) {
+            score += ownedNeighborCount * 8; 
+            if (isEarlyGame) score += 60; 
+            else score -= 5; 
+            if (ownedNeighborCount === 0) score -= 15;
+            if (isThreatened && cubeDistance(h, player) < 5) score += 20;
+            if (bot.recentUpgrades.length < queueSize) score += 50;
+      } else {
+            continue; 
+      }
+      potentialGoals.push({ hex: h, score });
   }
 
-  return { action: { type: 'WAIT', stateVersion }, debug: 'Idle' };
+  // Sort by Score
+  potentialGoals.sort((a,b) => b.score - a.score);
+
+  // 4. Iterate Candidates
+  for (let i = 0; i < Math.min(potentialGoals.length, 5); i++) {
+      const result = evaluateGoal(potentialGoals[i].hex);
+      if (result) return result;
+  }
+
+  // 5. Fallback
+  return getRecoveryFallback('No Reachable Targets');
 };

@@ -1,1 +1,0 @@
-// Deprecated. See rules/config.ts

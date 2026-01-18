@@ -1,7 +1,3 @@
-
-
-
-
 import { System } from './System';
 import { GameState, GameEvent, EntityState, EntityType, SessionState } from '../../types';
 import { WorldIndex } from '../WorldIndex';
@@ -46,6 +42,11 @@ export class AiSystem implements System {
         tickReservedKeys 
       );
 
+      // PERSIST MEMORY (Crucial for Master Goal logic)
+      if (aiResult.memory) {
+          bot.memory = aiResult.memory;
+      }
+
       state.botActivityLog.unshift({
           botId: bot.id,
           action: aiResult.action ? aiResult.action.type : 'WAIT',
@@ -66,11 +67,18 @@ export class AiSystem implements System {
                  message: `Bot ${bot.id} action failed: ${res.reason}`,
                  timestamp: now
              });
+             // If action failed, maybe reset memory/goal to force rethink next tick?
+             if (bot.memory) {
+                 bot.memory.lastActionFailed = true;
+                 bot.memory.stuckCounter = (bot.memory.stuckCounter || 0) + 1;
+             }
          } else {
              if (aiResult.action.type === 'MOVE') {
                  const target = aiResult.action.path[aiResult.action.path.length - 1];
                  tickReservedKeys.add(getHexKey(target.q, target.r));
              }
+             // Reset stuck counter on success
+             if (bot.memory) bot.memory.stuckCounter = 0;
          }
       }
     }

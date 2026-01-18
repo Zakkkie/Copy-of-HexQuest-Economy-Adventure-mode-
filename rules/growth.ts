@@ -1,6 +1,3 @@
-
-
-
 import { Hex, Entity, HexCoord } from '../types';
 
 export type GrowthCheckResult = {
@@ -27,6 +24,10 @@ export function checkGrowthCondition(
 
   // RECOVERY RULE: If current level is below max level (damaged/decayed), allow free growth
   if (targetLevel <= hex.maxLevel) {
+     // FIX: Cannot recover sectors owned by others (unless capturing via L0->L1 logic)
+     if (hex.ownerId && hex.ownerId !== entity.id && targetLevel > 1) {
+        return { canGrow: false, reason: 'HOSTILE SECTOR' };
+     }
      return { canGrow: true };
   }
 

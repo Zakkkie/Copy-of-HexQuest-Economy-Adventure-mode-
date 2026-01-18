@@ -19,10 +19,12 @@ export class MovementSystem implements System {
       return;
     }
 
-    // 1. Completion Check
+    // 1. Completion Check (Cleanup if queue was cleared externally)
     if (entity.movementQueue.length === 0) {
       if (entity.state === EntityState.MOVING) {
          entity.state = EntityState.IDLE;
+         // Reset ability usage when arriving at destination
+         entity.recoveredCurrentHex = false;
          events.push(GameEventFactory.create('MOVE_COMPLETE', undefined, entity.id));
       }
       return;
@@ -44,9 +46,15 @@ export class MovementSystem implements System {
           
           const blockerId = index.getEntityAt(nextStep.q, nextStep.r)?.id || 'UNKNOWN';
           const msg = `Path Blocked by ${blockerId}`;
-          const formattedMsg = `[${entity.id}] ${msg}`;
-          state.messageLog.unshift(formattedMsg);
-          if (state.messageLog.length > 100) state.messageLog.pop();
+          
+          // Log collision as warning
+          state.messageLog.unshift({
+             id: `col-${Date.now()}-${entity.id}`,
+             text: msg,
+             type: 'WARN',
+             source: entity.id,
+             timestamp: Date.now()
+          });
           
           events.push(GameEventFactory.create('ACTION_DENIED', msg, entity.id));
           return;
@@ -54,7 +62,6 @@ export class MovementSystem implements System {
     }
 
     // 3. Execute Move
-    entity.state = EntityState.MOVING;
     entity.movementQueue.shift();
 
     const oldQ = entity.q;
@@ -79,9 +86,21 @@ export class MovementSystem implements System {
         };
       } else {
         // IMMUTABLE UPDATE: Create new hex object instead of mutating existing one
-        // This is critical for the new GameEngine.cloneState() optimization.
         state.grid[k] = { ...state.grid[k], revealed: true };
       }
     });
+
+    // 4. Update State Immediately
+    // If queue is empty (or next is upgrade), transition to IDLE now so UI unlocks.
+    const hasMoreMoves = entity.movementQueue.length > 0 && !entity.movementQueue[0].upgrade;
+    
+    if (!hasMoreMoves) {
+        entity.state = EntityState.IDLE;
+        // Reset ability usage when arriving at destination
+        entity.recoveredCurrentHex = false;
+        events.push(GameEventFactory.create('MOVE_COMPLETE', undefined, entity.id));
+    } else {
+        entity.state = EntityState.MOVING;
+    }
   }
 }

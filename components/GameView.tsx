@@ -10,10 +10,10 @@ import Background from './Background.tsx';
 import { 
   AlertCircle, Pause, Play, Trophy, Coins, Footprints, AlertTriangle, LogOut,
   Crown, Target, TrendingUp, ChevronDown, ChevronUp, Shield, MapPin,
-  RotateCcw, RotateCw, CheckCircle2, ChevronsUp, Lock, Bot, Activity
+  RotateCcw, RotateCw, CheckCircle2, ChevronsUp, Lock, Bot, Activity, Zap, Terminal, XCircle
 } from 'lucide-react';
 import { EXCHANGE_RATE_COINS_PER_MOVE, DIFFICULTY_SETTINGS } from '../rules/config.ts';
-import { Hex, EntityType, EntityState } from '../types.ts';
+import { Hex, EntityType, EntityState, LogEntry } from '../types.ts';
 
 const VIEWPORT_PADDING = 300; 
 
@@ -25,8 +25,6 @@ type RenderItem =
 
 const GameView: React.FC = () => {
   // --- STATE SELECTION (Optimized Selectors) ---
-  // We subscribe to specific parts of the session to avoid re-rendering if 
-  // unrelated parts of the store (like leaderboard) change.
   const grid = useGameStore(state => state.session?.grid);
   const player = useGameStore(state => state.session?.player);
   const bots = useGameStore(state => state.session?.bots);
@@ -87,20 +85,28 @@ const GameView: React.FC = () => {
   // UI Local State
   const [showExitConfirmation, setShowExitConfirmation] = useState(false);
   const [isRankingsOpen, setIsRankingsOpen] = useState(window.innerWidth >= 768);
-  const [activeTab, setActiveTab] = useState<'LOGS' | 'BOTS'>('LOGS');
   const [hoveredHexId, setHoveredHexId] = useState<string | null>(null);
-  const logsContainerRef = useRef<HTMLDivElement>(null);
-  const botLogsContainerRef = useRef<HTMLDivElement>(null);
+  const consoleRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll log panels
-  useEffect(() => {
-    if (logsContainerRef.current && activeTab === 'LOGS') {
-        logsContainerRef.current.scrollTop = 0; 
-    }
-    if (botLogsContainerRef.current && activeTab === 'BOTS') {
-        botLogsContainerRef.current.scrollTop = 0;
-    }
-  }, [messageLog, botActivityLog, activeTab]);
+  // --- CONSOLE LOG MERGING ---
+  // Merge System/Player logs with Bot logs into a single unified stream
+  const unifiedLogs = useMemo(() => {
+    const sysLogs = (messageLog || []).map(l => ({ ...l, isBot: false }));
+    
+    // Convert BotLogEntry to LogEntry format for unification
+    const botLogs = (botActivityLog || []).map(l => ({
+        id: `bot-${l.botId}-${l.timestamp}`,
+        text: `[${l.action}] ${l.reason} ${l.target ? '@ ' + l.target : ''}`,
+        type: 'DEBUG' as const, // Bot thoughts are debug level
+        source: l.botId,
+        timestamp: l.timestamp,
+        isBot: true,
+        botColor: bots.find(b => b.id === l.botId)?.avatarColor
+    }));
+
+    // Merge and Sort by Timestamp (Newest First)
+    return [...sysLogs, ...botLogs].sort((a, b) => b.timestamp - a.timestamp).slice(0, 100);
+  }, [messageLog, botActivityLog, bots]);
 
   // Game Loop (Tick)
   useEffect(() => {
@@ -129,12 +135,11 @@ const GameView: React.FC = () => {
   const currentHex = grid[getHexKey(player.q, player.r)];
   const neighbors = useMemo(() => getNeighbors(player.q, player.r), [player.q, player.r]);
   
-  // Safe bot filtering to prevent "undefined reading 'q'" crashes
   const safeBots = useMemo(() => (bots || []).filter(b => b && typeof b.q === 'number' && typeof b.r === 'number'), [bots]);
   const botPositions = useMemo(() => safeBots.map(b => ({ q: b.q, r: b.r })), [safeBots]);
   
   const isMoving = player.state === EntityState.MOVING;
-  const canRecover = currentHex ? (currentHex.currentLevel < currentHex.maxLevel) : false;
+  const canRecover = !player.recoveredCurrentHex;
 
   const growthCondition = useMemo(() => {
     if (!currentHex) return { canGrow: false, reason: 'Invalid Hex' };
@@ -151,31 +156,51 @@ const GameView: React.FC = () => {
 
   const timeData = useMemo(() => {
     if (!currentHex) return { totalNeeded: 1, totalDone: 0, percent: 0, mode: 'IDLE' };
-    let totalNeeded = 0;
-    const isTargetingUpgrade = (playerGrowthIntent === 'UPGRADE') || (!canRecover && canUpgrade);
-    const calculationTarget = isTargetingUpgrade ? currentHex.maxLevel + 1 : currentHex.maxLevel;
+    
+    // Determine what we are calculating progress FOR
+    // If player explicitly wants to recover, use Recovery Mode
+    const isRecovering = playerGrowthIntent === 'RECOVER';
+    const isUpgrading = playerGrowthIntent === 'UPGRADE' || (!isRecovering && canUpgrade);
 
-    for (let l = currentHex.currentLevel + 1; l <= calculationTarget; l++) {
-        totalNeeded += getSecondsToGrow(l);
+    let totalNeeded = 0;
+    let mode = 'IDLE';
+
+    if (isRecovering) {
+        // RECOVERY TIME
+        totalNeeded = getSecondsToGrow(currentHex.maxLevel);
+        mode = 'RECOVERY';
+    } else {
+        // UPGRADE TIME
+        // Calculate remaining time for the *current step* or total needed for multi-step? 
+        // Existing logic sums up steps, let's keep it consistent.
+        const calculationTarget = currentHex.maxLevel + 1;
+        for (let l = currentHex.currentLevel + 1; l <= calculationTarget; l++) {
+            totalNeeded += getSecondsToGrow(l);
+        }
+        mode = 'UPGRADE';
     }
+
     const currentStepProgress = currentHex.progress;
-    const remaining = Math.max(0, totalNeeded - currentStepProgress);
-    const percent = totalNeeded > 0 ? ((totalNeeded - remaining) / totalNeeded) * 100 : 0;
-    const mode = isTargetingUpgrade ? 'UPGRADE' : 'GROWTH';
+    // For single-step actions (Recovery), remaining is simple. For multi-step (Upgrade from decayed state), it's complex.
+    // Simplified visual: Just show progress of current hex.progress against needed for THIS step.
+    
+    // Recalculate 'needed' for just the current active step to make progress bar smooth
+    const currentStepNeeded = isRecovering 
+        ? getSecondsToGrow(currentHex.maxLevel) 
+        : getSecondsToGrow(currentHex.currentLevel + 1);
+
+    const percent = currentStepNeeded > 0 ? (currentStepProgress / currentStepNeeded) * 100 : 0;
+    const remaining = Math.max(0, currentStepNeeded - currentStepProgress);
 
     return { totalNeeded, remaining, percent, mode };
-  }, [currentHex, isPlayerGrowing, canRecover, canUpgrade, playerGrowthIntent]);
+  }, [currentHex, isPlayerGrowing, canUpgrade, playerGrowthIntent]);
 
   const handleGrowClick = () => {
     centerOnPlayer(); 
     if (isMoving) return;
     if (!currentHex) return;
     if (!canRecover) {
-        if (currentHex.currentLevel === currentHex.maxLevel) {
-            showToast("Sector Stable (Use Upgrade)", "info");
-        } else {
-            showToast("Cannot Recover", "error");
-        }
+        showToast("Supplies exhausted here", "error");
         return;
     }
     togglePlayerGrowth('RECOVER');
@@ -387,12 +412,10 @@ const GameView: React.FC = () => {
         items.push({ type: 'HEX', id: hex.id, depth: y, q: hex.q, r: hex.r });
      }
 
-     // FIX: Safe bot mapping to prevent undefined crashes
      const allUnits = [{ ...player, isPlayer: true }, ...safeBots.map(b => ({ ...b, isPlayer: false }))];
      const now = Date.now();
 
      for (const u of allUnits) {
-         // CRITICAL FIX: Ensure 'q' and 'r' exist
          if (!u || typeof u.q !== 'number' || typeof u.r !== 'number') continue;
 
          let track = movementTracker.current[u.id];
@@ -423,6 +446,38 @@ const GameView: React.FC = () => {
          }
 
          items.push({ type: 'UNIT', id: u.id, depth: sortY + 25, q: u.q, r: u.r, isPlayer: u.isPlayer });
+     }
+
+     // Visualizing Bot Paths (Debug/Observation)
+     for (const b of safeBots) {
+         if (b.movementQueue.length > 0) {
+             const startHex = grid[getHexKey(b.q, b.r)];
+             const startH = startHex ? 10 + (startHex.maxLevel * 6) : 10;
+             const startPos = hexToPixel(b.q, b.r, cameraRotation);
+             
+             // Construct points array [x1, y1, x2, y2, ...]
+             const points = [startPos.x, startPos.y - startH - 10]; // Start at current bot pos
+
+             for (const step of b.movementQueue) {
+                 if (step.upgrade) continue; // Skip upgrade actions in visual path
+                 const hHex = grid[getHexKey(step.q, step.r)];
+                 const h = hHex ? 10 + (hHex.maxLevel * 6) : 10;
+                 const p = hexToPixel(step.q, step.r, cameraRotation);
+                 points.push(p.x, p.y - h - 10);
+             }
+
+             if (points.length >= 4) {
+                 items.push({
+                     type: 'CONN',
+                     id: `path-${b.id}`,
+                     depth: 999999, // Render on top
+                     points,
+                     color: b.avatarColor || '#ef4444',
+                     dash: [4, 4],
+                     opacity: 0.6
+                 });
+             }
+         }
      }
 
      if (!isMoving) {
@@ -463,6 +518,7 @@ const GameView: React.FC = () => {
      return items.sort((a, b) => a.depth - b.depth);
   }, [grid, player, safeBots, cameraRotation, isMoving, playerNeighborKeys, viewState, dimensions]);
 
+  // --- RENDER ---
   return (
     <div className="relative h-full w-full overflow-hidden bg-[#020617]" onContextMenu={(e) => e.preventDefault()}>
       <style>{`
@@ -608,63 +664,64 @@ const GameView: React.FC = () => {
           </div>
       </div>
 
-      {/* --- RIGHT PANEL: LOGS + BOTS --- */}
-      <div className="hidden md:flex absolute top-24 right-4 z-20 pointer-events-auto flex-col w-72 bg-slate-900/80 backdrop-blur-md border border-slate-700/50 rounded-2xl shadow-xl overflow-hidden max-h-[calc(100vh-10rem)]">
-          {/* Tabs */}
-          <div className="flex border-b border-slate-700/50">
-             <button 
-                onClick={() => setActiveTab('LOGS')}
-                className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-wider transition-colors flex items-center justify-center gap-2
-                  ${activeTab === 'LOGS' ? 'bg-slate-800/80 text-white' : 'text-slate-500 hover:text-slate-300'}`}
-             >
-                <Activity className="w-3 h-3" /> System Log
-             </button>
-             <button 
-                onClick={() => setActiveTab('BOTS')}
-                className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-wider transition-colors flex items-center justify-center gap-2
-                  ${activeTab === 'BOTS' ? 'bg-slate-800/80 text-white' : 'text-slate-500 hover:text-slate-300'}`}
-             >
-                <Bot className="w-3 h-3" /> Bot Logic
-             </button>
+      {/* --- RIGHT PANEL: DEBUG CONSOLE --- */}
+      <div className="hidden md:flex absolute top-24 right-4 z-20 pointer-events-auto flex-col w-[350px] bg-slate-950/90 backdrop-blur-lg border border-slate-700/50 rounded-2xl shadow-2xl overflow-hidden max-h-[calc(100vh-10rem)]">
+          <div className="flex items-center justify-between p-3 bg-slate-900 border-b border-slate-700">
+             <div className="flex items-center gap-2 text-slate-300 font-bold text-xs uppercase tracking-wider">
+                <Terminal className="w-4 h-4 text-indigo-400" />
+                <span>Debug Console</span>
+             </div>
+             <div className="flex gap-2">
+                <div className="w-2.5 h-2.5 rounded-full bg-red-500/20 border border-red-500/50"></div>
+                <div className="w-2.5 h-2.5 rounded-full bg-amber-500/20 border border-amber-500/50"></div>
+                <div className="w-2.5 h-2.5 rounded-full bg-emerald-500/20 border border-emerald-500/50"></div>
+             </div>
           </div>
 
-          {/* Content */}
-          <div className="flex-1 overflow-y-auto no-scrollbar bg-black/40 p-2 min-h-[150px]">
-              {activeTab === 'LOGS' && (
-                  <div ref={logsContainerRef} className="flex flex-col gap-1.5">
-                     {messageLog.map((msg, idx) => (
-                        <div key={`${typeof msg === 'string' ? msg : JSON.stringify(msg)}-${idx}`} className="bg-slate-800/50 border-l-2 border-cyan-500/50 px-2 py-1.5 text-[10px] font-mono text-cyan-100/90 rounded-r-md">
-                          {typeof msg === 'string' ? msg : JSON.stringify(msg)}
+          <div ref={consoleRef} className="flex-1 overflow-y-auto overflow-x-hidden p-0 font-mono text-[10px] bg-[#0c0e15] text-slate-300">
+             {unifiedLogs.length === 0 && (
+                <div className="p-4 text-slate-600 italic text-center">System Idle. Waiting for events...</div>
+             )}
+             {unifiedLogs.map((log, i) => {
+                 let logStyle = "border-l-2 border-slate-700 bg-slate-900/20";
+                 let textStyle = "text-slate-300";
+                 
+                 if (log.type === 'ERROR') {
+                     logStyle = "border-l-2 border-red-500 bg-red-950/20";
+                     textStyle = "text-red-400 font-bold";
+                 } else if (log.type === 'WARN') {
+                     logStyle = "border-l-2 border-amber-500 bg-amber-950/20";
+                     textStyle = "text-amber-400";
+                 } else if (log.type === 'SUCCESS') {
+                     logStyle = "border-l-2 border-emerald-500 bg-emerald-950/20";
+                     textStyle = "text-emerald-400";
+                 } else if (log.type === 'DEBUG') {
+                     logStyle = "border-l-2 border-indigo-500/30 bg-indigo-950/10";
+                     textStyle = "text-slate-400 italic";
+                 }
+
+                 return (
+                    <div key={log.id} className={`flex gap-2 p-2 border-b border-slate-800/50 ${logStyle}`}>
+                        <div className="shrink-0 w-16 text-slate-600 text-[9px] select-none">
+                            {new Date(log.timestamp).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute:'2-digit', second:'2-digit' })}
                         </div>
-                     ))}
-                  </div>
-              )}
-              {activeTab === 'BOTS' && (
-                  <div ref={botLogsContainerRef} className="flex flex-col gap-2">
-                     {botActivityLog.map((log, idx) => {
-                         const color = safeBots.find(b => b.id === log.botId)?.avatarColor || '#64748b';
-                         return (
-                            <div key={idx} className="bg-slate-900/80 border border-slate-700 p-2 rounded-lg">
-                                <div className="flex justify-between items-center mb-1">
-                                    <div className="flex items-center gap-2">
-                                        <div className="w-2 h-2 rounded-full" style={{backgroundColor: color}} />
-                                        <span className="text-[10px] font-bold text-slate-300 uppercase">{log.botId}</span>
-                                    </div>
-                                    <span className="text-[9px] font-mono text-slate-500">{formatTime(Date.now() - log.timestamp)} ago</span>
-                                </div>
-                                <div className="flex items-center gap-2 text-[10px] font-mono text-white">
-                                    <span className="text-amber-500 font-bold">{log.action}</span>
-                                    {log.target && <span className="text-slate-400">@ {log.target}</span>}
-                                </div>
-                                <div className="text-[9px] text-slate-500 mt-1 italic leading-tight border-t border-slate-800 pt-1 mt-1">
-                                    {log.reason}
-                                </div>
+                        <div className="flex-1 break-words">
+                            <div className="flex items-center gap-2 mb-0.5">
+                                {(log as any).isBot ? (
+                                    <span className="px-1 py-0.5 rounded bg-slate-800 text-xs font-bold uppercase tracking-wider" style={{ color: (log as any).botColor }}>
+                                        {log.source}
+                                    </span>
+                                ) : (
+                                    <span className={`uppercase font-bold tracking-wider text-[9px] ${log.source === 'SYSTEM' ? 'text-cyan-500' : 'text-blue-400'}`}>
+                                        {log.source}
+                                    </span>
+                                )}
                             </div>
-                         );
-                     })}
-                     {botActivityLog.length === 0 && <div className="text-center text-slate-600 text-xs py-4">Waiting for AI signals...</div>}
-                  </div>
-              )}
+                            <span className={`${textStyle} leading-relaxed block`}>{log.text}</span>
+                        </div>
+                    </div>
+                 );
+             })}
           </div>
       </div>
 
@@ -702,18 +759,31 @@ const GameView: React.FC = () => {
         <button onClick={() => rotateCamera('left')} className="w-12 h-12 mb-4 bg-slate-900/80 backdrop-blur rounded-full border border-slate-700 text-slate-400 hover:text-white hover:bg-slate-800 transition-all pointer-events-auto shadow-xl active:scale-95 flex items-center justify-center"><RotateCcw className="w-5 h-5" /></button>
         <div className="flex gap-3 items-end pointer-events-auto h-20 transition-all duration-300">
            {isPlayerGrowing ? (
-              <button onClick={() => { centerOnPlayer(); togglePlayerGrowth('RECOVER'); }} className="w-44 h-20 bg-slate-900/90 backdrop-blur-xl border border-emerald-500/50 rounded-2xl relative overflow-hidden flex flex-col items-center justify-center shadow-[0_0_30px_rgba(16,185,129,0.2)] active:scale-95 transition-all group">
-                  <div className="absolute inset-0 bg-gradient-to-r from-emerald-600/10 via-emerald-400/30 to-emerald-600/10" style={{ width: `${timeData.percent}%`, transition: 'width 1s linear', backgroundSize: '200% 100%', animation: 'shimmer-gradient 3s linear infinite' }} />
-                  <div className="absolute bottom-0 left-0 h-0.5 bg-emerald-400 shadow-[0_0_10px_#34d399]" style={{ width: `${timeData.percent}%`, transition: 'width 1s linear' }} />
-                  <div className="relative z-10 flex flex-col items-center gap-1">
-                      <div className="flex items-center gap-2 text-emerald-100 font-black text-xs uppercase tracking-widest"><Pause className="w-3 h-3 fill-current" /><span>{timeData.mode === 'UPGRADE' ? 'UPGRADING' : 'RECOVERING'}</span></div>
-                      <span className="text-[10px] font-mono text-emerald-400 font-bold">{formatTime(timeData.remaining * 1000)}</span>
-                  </div>
+              <button onClick={() => { centerOnPlayer(); togglePlayerGrowth(timeData.mode === 'RECOVERY' ? 'RECOVER' : 'UPGRADE'); }} className={`w-44 h-20 bg-slate-900/90 backdrop-blur-xl rounded-2xl relative overflow-hidden flex flex-col items-center justify-center shadow-[0_0_30px_rgba(0,0,0,0.2)] active:scale-95 transition-all group ${timeData.mode === 'RECOVERY' ? 'border border-blue-500/50' : 'border border-emerald-500/50'}`}>
+                  {timeData.mode === 'RECOVERY' ? (
+                     <>
+                        <div className="absolute inset-0 bg-gradient-to-r from-blue-600/10 via-blue-400/30 to-blue-600/10" style={{ width: `${timeData.percent}%`, transition: 'width 1s linear', backgroundSize: '200% 100%', animation: 'shimmer-gradient 3s linear infinite' }} />
+                        <div className="absolute bottom-0 left-0 h-0.5 bg-blue-400 shadow-[0_0_10px_#60a5fa]" style={{ width: `${timeData.percent}%`, transition: 'width 1s linear' }} />
+                        <div className="relative z-10 flex flex-col items-center gap-1">
+                            <div className="flex items-center gap-2 text-blue-100 font-black text-xs uppercase tracking-widest"><Pause className="w-3 h-3 fill-current" /><span>RECOVERING</span></div>
+                            <span className="text-[10px] font-mono text-blue-400 font-bold">{formatTime(timeData.remaining * 1000)}</span>
+                        </div>
+                     </>
+                  ) : (
+                     <>
+                        <div className="absolute inset-0 bg-gradient-to-r from-emerald-600/10 via-emerald-400/30 to-emerald-600/10" style={{ width: `${timeData.percent}%`, transition: 'width 1s linear', backgroundSize: '200% 100%', animation: 'shimmer-gradient 3s linear infinite' }} />
+                        <div className="absolute bottom-0 left-0 h-0.5 bg-emerald-400 shadow-[0_0_10px_#34d399]" style={{ width: `${timeData.percent}%`, transition: 'width 1s linear' }} />
+                        <div className="relative z-10 flex flex-col items-center gap-1">
+                            <div className="flex items-center gap-2 text-emerald-100 font-black text-xs uppercase tracking-widest"><Pause className="w-3 h-3 fill-current" /><span>UPGRADING</span></div>
+                            <span className="text-[10px] font-mono text-emerald-400 font-bold">{formatTime(timeData.remaining * 1000)}</span>
+                        </div>
+                     </>
+                  )}
               </button>
            ) : (
               <>
                 <button onClick={handleGrowClick} className={`w-20 h-20 rounded-2xl flex flex-col items-center justify-center gap-2 border-2 transition-all active:scale-90 shadow-xl ${(canRecover && !isMoving) ? 'bg-blue-600/10 border-blue-500/50 hover:bg-blue-600/20 text-blue-100 shadow-[0_0_20px_rgba(37,99,235,0.2)]' : 'bg-slate-900/80 border-slate-800 text-slate-600 grayscale opacity-60 cursor-pointer hover:bg-slate-800'}`}>
-                    <Play className="w-6 h-6 fill-current" /><span className="text-[9px] font-black uppercase tracking-widest">Recovery</span>
+                    <Zap className="w-6 h-6 fill-current" /><span className="text-[9px] font-black uppercase tracking-widest">Recovery</span>
                 </button>
                 <button onClick={handleUpgradeClick} className={`w-20 h-20 rounded-2xl flex flex-col items-center justify-center gap-2 border-2 transition-all active:scale-90 shadow-xl ${(canUpgrade && !isMoving) ? 'bg-amber-600/10 border-amber-500/50 hover:bg-amber-600/20 text-amber-100 shadow-[0_0_20px_rgba(245,158,11,0.2)]' : 'bg-slate-900/80 border-slate-800 text-slate-600 grayscale opacity-60 cursor-pointer hover:bg-slate-800'}`}>
                     <ChevronsUp className="w-6 h-6" /><span className="text-[9px] font-black uppercase tracking-widest">Upgrade</span>

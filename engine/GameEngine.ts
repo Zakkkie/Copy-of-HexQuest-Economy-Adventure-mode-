@@ -72,8 +72,8 @@ export class GameEngine {
       })),
 
       // 3. Clone Arrays
-      messageLog: [...source.messageLog],
-      botActivityLog: [...source.botActivityLog],
+      messageLog: source.messageLog.map(l => ({ ...l })), // Deep clone logs to prevent mutation issues
+      botActivityLog: source.botActivityLog.map(l => ({ ...l })),
       growingBotIds: [...source.growingBotIds],
       telemetry: source.telemetry ? [...source.telemetry] : undefined
     };
