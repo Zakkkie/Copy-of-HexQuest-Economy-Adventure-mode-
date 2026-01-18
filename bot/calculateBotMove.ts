@@ -1,3 +1,4 @@
+
 import { Entity, Hex, HexCoord, WinCondition, BotAction, Difficulty, BotMemory } from '../types';
 import { getLevelConfig, GAME_CONFIG, DIFFICULTY_SETTINGS } from '../rules/config';
 import { getHexKey, cubeDistance, findPath, getNeighbors } from '../services/hexUtils';
@@ -61,6 +62,21 @@ export const calculateBotMove = (
           const attackMove = escapeRoutes.find(n => n.q === player.q && n.r === player.r);
           const target = attackMove || escapeRoutes[Math.floor(Math.random() * escapeRoutes.length)];
           
+          // CRITICAL FIX: Affordability Check
+          // Calculate cost before attempting move to avoid infinite error loops in Engine
+          const targetHex = grid[getHexKey(target.q, target.r)];
+          const moveCost = (targetHex && targetHex.maxLevel >= 2) ? targetHex.maxLevel : 1;
+          const maxPossibleMoves = bot.moves + Math.floor(bot.coins / GAME_CONFIG.EXCHANGE_RATE_COINS_PER_MOVE);
+
+          if (maxPossibleMoves < moveCost) {
+             // We are trapped and broke. Just wait and reset counter to stop spamming.
+             return { 
+                 action: { type: 'WAIT', stateVersion }, 
+                 debug: 'PANIC: BROKE', 
+                 memory: { ...nextMemory, stuckCounter: 0 } 
+             };
+          }
+
           return {
               action: { type: 'MOVE', path: [target], stateVersion },
               debug: attackMove ? 'PANIC: ATTACK!' : 'PANIC: WANDER',
@@ -112,10 +128,8 @@ export const calculateBotMove = (
            return distA - distB;
        });
        
-       const best = candidates[0];
-       
        // FAILURE CASE 1: No farms available
-       if (!best) {
+       if (candidates.length === 0) {
            return { 
                action: { type: 'WAIT', stateVersion }, 
                debug: 'Bankrupt (No Farms)', 
@@ -123,31 +137,33 @@ export const calculateBotMove = (
            };
        }
 
-       // Move to farm
-       const path = findPath({q:bot.q, r:bot.r}, {q:best.q, r:best.r}, grid, bot.playerLevel, otherUnitObstacles);
-       
-       // FAILURE CASE 2: No path
-       if (!path) {
-           return { 
-               action: { type: 'WAIT', stateVersion }, 
-               debug: 'Trapped', 
-               memory: { ...nextMemory, stuckCounter: nextMemory.stuckCounter + 1 } 
-           };
+       // 3. Try top candidates (Anti-block logic)
+       // Iterate through top 3 candidates to find a reachable one
+       for (const candidate of candidates.slice(0, 3)) {
+           const path = findPath(
+               {q:bot.q, r:bot.r}, 
+               {q:candidate.q, r:candidate.r}, 
+               grid, 
+               bot.playerLevel, 
+               otherUnitObstacles
+           );
+           
+           if (path) {
+               const cost = calculatePathCost(path);
+               if (bot.coins >= cost.coins) {
+                   return { 
+                       action: { type: 'MOVE', path, stateVersion }, 
+                       debug: `Moving to Farm (${reason})`, 
+                       memory: { ...nextMemory, stuckCounter: 0 } 
+                   };
+               }
+           }
        }
        
-       const cost = calculatePathCost(path);
-       if (bot.coins >= cost.coins) {
-           return { 
-               action: { type: 'MOVE', path, stateVersion }, 
-               debug: `Moving to Farm (${reason})`, 
-               memory: { ...nextMemory, stuckCounter: 0 } 
-           };
-       }
-       
-       // FAILURE CASE 3: Too poor to move
+       // FAILURE CASE 2: No reachable farms or too poor
        return { 
            action: { type: 'WAIT', stateVersion }, 
-           debug: 'Bankrupt & Stuck', 
+           debug: 'Trapped & Broke', 
            memory: { ...nextMemory, stuckCounter: nextMemory.stuckCounter + 1 } 
        };
   };
