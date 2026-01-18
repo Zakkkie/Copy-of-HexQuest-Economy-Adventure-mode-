@@ -12,7 +12,7 @@ import Background from './Background.tsx';
 import { 
   AlertCircle, Pause, Play, Trophy, Coins, Footprints, AlertTriangle, LogOut,
   Crown, Target, TrendingUp, ChevronDown, ChevronUp, Shield, MapPin,
-  RotateCcw, RotateCw, CheckCircle2, ChevronsUp, Lock, Bot, Activity, Zap, Terminal, XCircle, Volume2, VolumeX
+  RotateCcw, RotateCw, CheckCircle2, ChevronsUp, Lock, Bot, Activity, Zap, Terminal, XCircle, Volume2, VolumeX, HelpCircle, Info
 } from 'lucide-react';
 import { EXCHANGE_RATE_COINS_PER_MOVE, DIFFICULTY_SETTINGS } from '../rules/config.ts';
 import { Hex, EntityType, EntityState, LogEntry } from '../types.ts';
@@ -91,6 +91,7 @@ const GameView: React.FC = () => {
   const [showExitConfirmation, setShowExitConfirmation] = useState(false);
   const [isRankingsOpen, setIsRankingsOpen] = useState(window.innerWidth >= 768);
   const [hoveredHexId, setHoveredHexId] = useState<string | null>(null);
+  const [helpTopic, setHelpTopic] = useState<'RANK' | 'QUEUE' | 'COINS' | 'MOVES' | null>(null);
   const consoleRef = useRef<HTMLDivElement>(null);
 
   // --- CONSOLE LOG MERGING ---
@@ -523,6 +524,10 @@ const GameView: React.FC = () => {
      return items.sort((a, b) => a.depth - b.depth);
   }, [grid, player, safeBots, cameraRotation, isMoving, playerNeighborKeys, viewState, dimensions]);
 
+  // Calculate Progress % for UI Bars
+  const levelProgress = winCondition ? Math.min(100, (player.playerLevel / winCondition.targetLevel) * 100) : 0;
+  const coinProgress = winCondition ? Math.min(100, (player.totalCoinsEarned / winCondition.targetCoins) * 100) : 0;
+
   // --- RENDER ---
   return (
     <div className="relative h-full w-full overflow-hidden bg-[#020617]" onContextMenu={(e) => e.preventDefault()}>
@@ -575,17 +580,38 @@ const GameView: React.FC = () => {
       <div className="absolute inset-x-0 top-0 p-2 md:p-4 z-30 pointer-events-none select-none">
           {/* STATS */}
           <div className="absolute top-2 md:top-4 left-2 md:left-1/2 md:-translate-x-1/2 flex flex-col items-center gap-2 max-w-[calc(100%-4rem)] md:max-w-fit pointer-events-auto z-40">
-               <div className="flex items-center gap-2 md:gap-6 px-3 md:px-8 py-2 md:py-3 bg-slate-900/90 backdrop-blur-2xl rounded-[1.5rem] md:rounded-[2rem] border border-slate-800 shadow-2xl overflow-x-auto no-scrollbar max-w-full">
-                   <div className="flex flex-col items-center gap-0.5 md:gap-1 shrink-0">
-                       <span className="text-[8px] md:text-[9px] font-bold text-slate-500 tracking-widest uppercase">Level</span>
+               
+               <div className="flex items-stretch gap-2 md:gap-4 px-4 md:px-6 py-2 bg-slate-900/90 backdrop-blur-2xl rounded-[1.5rem] border border-slate-800 shadow-2xl overflow-hidden relative group">
+                   
+                   {/* RANK BLOCK (Clickable for Help) */}
+                   <button 
+                      onClick={() => { setHelpTopic('RANK'); playUiSound('CLICK'); }}
+                      className="flex flex-col items-center justify-center gap-1 min-w-[70px] hover:bg-slate-800/50 rounded-xl p-1 transition-colors relative cursor-help"
+                   >
                        <div className="flex items-center gap-1.5 md:gap-2">
                            <Crown className="w-4 h-4 md:w-5 md:h-5 text-indigo-500" />
-                           <span className="text-lg md:text-2xl font-black text-white leading-none">{player.playerLevel}</span>
+                           <div className="flex flex-col items-start leading-none">
+                               <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Rank</span>
+                               <div className="flex items-baseline gap-1">
+                                  <span className="text-lg md:text-2xl font-black text-white">{player.playerLevel}</span>
+                                  {winCondition && <span className="text-[10px] md:text-xs text-slate-500 font-mono">/ {winCondition.targetLevel}</span>}
+                               </div>
+                           </div>
                        </div>
-                   </div>
-                   <div className="w-px h-6 md:h-8 bg-slate-800 shrink-0"></div>
-                   <div className="flex flex-col items-center gap-0.5 md:gap-1 shrink-0">
-                       <span className="text-[8px] md:text-[9px] font-bold text-slate-500 tracking-widest uppercase">Upgrade</span>
+                       {/* Progress Bar */}
+                       <div className="w-full h-1 bg-slate-800 rounded-full mt-1 overflow-hidden">
+                           <div className="h-full bg-indigo-500" style={{ width: `${levelProgress}%` }}></div>
+                       </div>
+                   </button>
+
+                   <div className="w-px bg-slate-800 my-1"></div>
+
+                   {/* UPGRADE QUEUE BLOCK */}
+                   <button 
+                      onClick={() => { setHelpTopic('QUEUE'); playUiSound('CLICK'); }}
+                      className="flex flex-col items-center justify-center gap-1 min-w-[60px] hover:bg-slate-800/50 rounded-xl p-1 transition-colors cursor-help"
+                   >
+                       <span className="text-[10px] font-bold text-slate-500 tracking-widest uppercase">Cycle</span>
                        <div className="flex items-center gap-1.5 md:gap-2">
                            <TrendingUp className="w-4 h-4 md:w-5 md:h-5 text-emerald-500" />
                            <div className="flex gap-0.5 md:gap-1 h-4 md:h-5 items-center">
@@ -594,33 +620,50 @@ const GameView: React.FC = () => {
                                ))}
                            </div>
                        </div>
-                   </div>
-                   <div className="w-px h-6 md:h-8 bg-slate-800 shrink-0"></div>
-                   <div className="flex flex-col items-center gap-0.5 md:gap-1 shrink-0">
-                       <span className="text-[8px] md:text-[9px] font-bold text-slate-500 tracking-widest uppercase">Credits</span>
+                   </button>
+
+                   <div className="w-px bg-slate-800 my-1"></div>
+
+                   {/* COINS BLOCK */}
+                   <button 
+                      onClick={() => { setHelpTopic('COINS'); playUiSound('CLICK'); }}
+                      className="flex flex-col items-center justify-center gap-1 min-w-[80px] hover:bg-slate-800/50 rounded-xl p-1 transition-colors cursor-help"
+                   >
                        <div className="flex items-center gap-1.5 md:gap-2">
                            <Coins className="w-4 h-4 md:w-5 md:h-5 text-amber-500" />
-                           <span className="text-lg md:text-2xl font-black text-white leading-none">{player.coins}</span>
+                           <div className="flex flex-col items-start leading-none">
+                               <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Credits</span>
+                               <div className="flex items-baseline gap-1">
+                                  <span className="text-lg md:text-2xl font-black text-white">{player.coins}</span>
+                                  {winCondition && <span className="text-[10px] md:text-xs text-slate-500 font-mono">/ {winCondition.targetCoins}</span>}
+                               </div>
+                           </div>
                        </div>
-                   </div>
-                   <div className="w-px h-6 md:h-8 bg-slate-800 shrink-0"></div>
-                   <div className="flex flex-col items-center gap-0.5 md:gap-1 shrink-0">
-                       <span className="text-[8px] md:text-[9px] font-bold text-slate-500 tracking-widest uppercase">Moves</span>
+                        {/* Progress Bar */}
+                       <div className="w-full h-1 bg-slate-800 rounded-full mt-1 overflow-hidden">
+                           <div className="h-full bg-amber-500" style={{ width: `${coinProgress}%` }}></div>
+                       </div>
+                   </button>
+
+                   <div className="w-px bg-slate-800 my-1"></div>
+
+                   {/* MOVES BLOCK */}
+                   <button 
+                      onClick={() => { setHelpTopic('MOVES'); playUiSound('CLICK'); }}
+                      className="flex flex-col items-center justify-center gap-1 min-w-[60px] hover:bg-slate-800/50 rounded-xl p-1 transition-colors cursor-help"
+                   >
+                       <span className="text-[10px] font-bold text-slate-500 tracking-widest uppercase">Moves</span>
                        <div className="flex items-center gap-1.5 md:gap-2">
                            <Footprints className={`w-4 h-4 md:w-5 md:h-5 ${isMoving ? 'text-slate-400 animate-pulse' : 'text-blue-500'}`} />
                            <span className="text-lg md:text-2xl font-black text-white leading-none">{player.moves}</span>
                        </div>
+                   </button>
+                   
+                    {/* Help Indicator */}
+                   <div className="absolute top-1 right-2 opacity-0 group-hover:opacity-50 transition-opacity">
+                      <HelpCircle className="w-3 h-3 text-slate-500" />
                    </div>
                </div>
-
-               {winCondition && (
-                  <div className="flex items-center gap-2 px-4 py-1.5 bg-slate-950/80 backdrop-blur-md rounded-full border border-slate-800/60 shadow-lg animate-in slide-in-from-top-1 fade-in">
-                      <Target className="w-3 h-3 text-cyan-400" />
-                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                          Goal: <span className="text-cyan-100">{winCondition.label}</span>
-                      </span>
-                  </div>
-               )}
           </div>
 
           {/* RIGHT: Rankings + Exit */}
@@ -825,6 +868,58 @@ const GameView: React.FC = () => {
                <button onClick={confirmPendingAction} className="flex-1 py-3 bg-amber-600 hover:bg-amber-500 rounded-xl text-white font-bold text-xs uppercase tracking-wider shadow-lg shadow-amber-500/20">Authorize</button>
              </div>
           </div>
+        </div>
+      )}
+
+       {/* HELP MODAL */}
+      {helpTopic && (
+        <div className="absolute inset-0 z-[70] bg-black/70 backdrop-blur-sm flex items-center justify-center pointer-events-auto p-4" onClick={() => setHelpTopic(null)}>
+            <div className="bg-slate-900 border border-slate-700 p-6 rounded-3xl shadow-2xl max-w-sm w-full relative overflow-hidden" onClick={e => e.stopPropagation()}>
+                <button onClick={() => setHelpTopic(null)} className="absolute top-4 right-4 text-slate-500 hover:text-white"><XCircle className="w-5 h-5"/></button>
+                <div className="flex flex-col items-center text-center">
+                    <div className="w-12 h-12 rounded-full bg-slate-800 flex items-center justify-center mb-4">
+                        {helpTopic === 'RANK' && <Crown className="w-6 h-6 text-indigo-500" />}
+                        {helpTopic === 'QUEUE' && <TrendingUp className="w-6 h-6 text-emerald-500" />}
+                        {helpTopic === 'COINS' && <Coins className="w-6 h-6 text-amber-500" />}
+                        {helpTopic === 'MOVES' && <Footprints className="w-6 h-6 text-blue-500" />}
+                    </div>
+                    
+                    <h3 className="text-xl font-black text-white mb-2 uppercase tracking-wide">
+                        {helpTopic === 'RANK' && 'Clearance Rank'}
+                        {helpTopic === 'QUEUE' && 'Upgrade Cycle'}
+                        {helpTopic === 'COINS' && 'Credits'}
+                        {helpTopic === 'MOVES' && 'Propulsion'}
+                    </h3>
+
+                    <div className="text-sm text-slate-400 leading-relaxed px-2">
+                        {helpTopic === 'RANK' && (
+                            <>
+                                <p className="mb-2">Your Rank determines your maximum clearance level. You cannot enter or upgrade sectors higher than your Rank.</p>
+                                <p className="text-indigo-400 font-bold">Goal: Reach Rank {winCondition?.targetLevel} to complete the mission.</p>
+                            </>
+                        )}
+                        {helpTopic === 'QUEUE' && (
+                            <>
+                                <p className="mb-2">To prevent instability, you cannot upgrade the same sector repeatedly. You must rotate between {queueSize} different sectors.</p>
+                                <p className="text-emerald-400 font-bold">Green dots show your current momentum.</p>
+                            </>
+                        )}
+                        {helpTopic === 'COINS' && (
+                            <>
+                                <p className="mb-2">Credits are required to fund sector upgrades. In emergencies, they can be converted into fuel for movement.</p>
+                                <p className="text-amber-500 font-bold">Goal: Amass {winCondition?.targetCoins} Credits.</p>
+                                <p className="text-xs mt-2 opacity-70">Exchange Rate: {EXCHANGE_RATE_COINS_PER_MOVE} Credits = 1 Move</p>
+                            </>
+                        )}
+                        {helpTopic === 'MOVES' && (
+                            <>
+                                <p className="mb-2">Movement requires energy. Moves are replenished by completing upgrades or recovering resources from owned sectors.</p>
+                                <p className="text-blue-400 font-bold">Tip: High level sectors cost more moves to traverse.</p>
+                            </>
+                        )}
+                    </div>
+                </div>
+            </div>
         </div>
       )}
 
