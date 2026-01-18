@@ -1,5 +1,4 @@
 
-
 # HexQuest Economy
 
 **HexQuest Economy** is a strategic hexagonal exploration game where economic management is as crucial as territorial expansion. Compete against AI Sentinels, manage your resources (Coins & Moves), and master the upgrade cycle to dominate the procedural world.
@@ -7,6 +6,11 @@
 ## 🎮 Game Overview
 
 You are a Commander tasked with expanding into a new sector. The world is infinite, procedural, and guarded by AI competitors.
+
+**New in v3.1:**
+*   **Procedural Audio**: Real-time synthesized sci-fi sound effects for UI, movement, and events (No external assets).
+*   **Smart Growth**: Implementation of the "Valley Rule" to prevent dead zones in your territory.
+*   **Enhanced AI**: "The Survivor" bot logic with anti-stuck mechanisms and strategic pathfinding.
 
 ### Core Mechanics
 
@@ -27,8 +31,7 @@ You are a Commander tasked with expanding into a new sector. The world is infini
 
 *   **The Staircase Rule (Support)**:
     *   To upgrade a hex to **Level X**, you must have an adjacent neighbor at **Level X-1** or higher.
-    *   This prevents building isolated towers and encourages "pyramid" or "staircase" structures.
-    *   *Tip: If you cannot grow a hex, ensure you have a supporting neighbor of the required rank.*
+    *   **Exception (The Valley Rule)**: If a hex is surrounded by **5 or more** neighbors of a strictly higher level, the support requirement is waived. This prevents "dead zones" deep within your territory.
 
 *   **Sentinels (AI)**:
     *   Hostile bots inhabit the world. They expand, gather resources, and build complex structures obeying the same rules as you.
@@ -62,6 +65,7 @@ Adjust the number of AI Sentinels (1-3) present in the sector.
 *   **Right Click & Drag**: Rotate the camera.
 *   **Mouse Wheel**: Zoom In / Zoom Out.
 *   **HUD Button**: Toggle **GROWTH/UPGRADE** mode.
+*   **Speaker Icon**: Toggle Sound Mute/Unmute.
 
 ---
 
@@ -111,10 +115,10 @@ To create a standalone executable (`.exe`, `.dmg`, or `.AppImage`) for distribut
 
 *   `src/components`: React UI components (GameView, HUD, Hexagon).
 *   `src/gameEngine`: Core logic for Rules (Staircase, Cycle) and AI.
-*   `src/services`: Math utilities for Hexagonal grids (q,r coordinates) and Pathfinding.
+*   `src/services`: Math utilities, Pathfinding, and Audio Synthesis.
 *   `src/store.ts`: State management (Zustand) handling the game loop.
 *   `electron/`: Main process code for the desktop wrapper.
 
 ---
 
-*HexQuest Economy v3.0*
+*HexQuest Economy v3.1*

@@ -6,12 +6,15 @@
 
 
 
+
+
 import { create } from 'zustand';
 import { GameState, Entity, Hex, EntityType, UIState, WinCondition, LeaderboardEntry, EntityState, MoveAction, RechargeAction, SessionState, LogEntry } from './types.ts';
 import { GAME_CONFIG } from './rules/config.ts';
 import { getHexKey, getNeighbors, findPath } from './services/hexUtils.ts';
 import { GameEngine } from './engine/GameEngine.ts';
 import { checkGrowthCondition } from './rules/growth.ts';
+import { audioService } from './services/audioService.ts';
 
 const MOCK_USER_DB: Record<string, { password: string; avatarColor: string; avatarIcon: string }> = {};
 const BOT_PALETTE = ['#ef4444', '#f97316', '#a855f7', '#ec4899']; 
@@ -48,6 +51,8 @@ interface GameStore extends GameState {
   tick: () => void;
   showToast: (msg: string, type: 'error' | 'success' | 'info') => void;
   hideToast: () => void;
+  toggleMute: () => void;
+  playUiSound: (type: 'HOVER' | 'CLICK') => void;
 }
 
 // Module-level singleton to hold the mutable engine instance outside of React's state
@@ -124,6 +129,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
   pendingConfirmation: null,
   leaderboard: loadLeaderboard(),
   hasActiveSession: false,
+  isMuted: false,
   
   // Reactive snapshot of the engine's state
   session: null,
@@ -131,16 +137,46 @@ export const useGameStore = create<GameStore>((set, get) => ({
   setUIState: (uiState) => set({ uiState }),
   
   // Auth
-  loginAsGuest: (nickname, avatarColor, avatarIcon) => set({ user: { isAuthenticated: true, isGuest: true, nickname, avatarColor, avatarIcon } }),
-  registerUser: (nickname, password, avatarColor, avatarIcon) => { MOCK_USER_DB[nickname] = { password, avatarColor, avatarIcon }; set({ user: { isAuthenticated: true, isGuest: false, nickname, avatarColor, avatarIcon } }); return { success: true }; },
-  loginUser: (nickname, password) => { const r = MOCK_USER_DB[nickname]; if (!r || r.password !== password) return { success: false }; set({ user: { isAuthenticated: true, isGuest: false, nickname, avatarColor: r.avatarColor, avatarIcon: r.avatarIcon } }); return { success: true }; },
+  loginAsGuest: (nickname, avatarColor, avatarIcon) => {
+    audioService.play('UI_CLICK');
+    set({ user: { isAuthenticated: true, isGuest: true, nickname, avatarColor, avatarIcon } });
+  },
+  registerUser: (nickname, password, avatarColor, avatarIcon) => { 
+    audioService.play('UI_CLICK');
+    MOCK_USER_DB[nickname] = { password, avatarColor, avatarIcon }; 
+    set({ user: { isAuthenticated: true, isGuest: false, nickname, avatarColor, avatarIcon } }); 
+    return { success: true }; 
+  },
+  loginUser: (nickname, password) => { 
+    audioService.play('UI_CLICK');
+    const r = MOCK_USER_DB[nickname]; 
+    if (!r || r.password !== password) {
+      audioService.play('ERROR');
+      return { success: false }; 
+    }
+    set({ user: { isAuthenticated: true, isGuest: false, nickname, avatarColor: r.avatarColor, avatarIcon: r.avatarIcon } }); 
+    return { success: true }; 
+  },
   logout: () => {
+    audioService.play('UI_CLICK');
     get().abandonSession();
     set({ user: null });
   },
 
+  toggleMute: () => {
+    const newVal = !get().isMuted;
+    audioService.setMuted(newVal);
+    set({ isMuted: newVal });
+  },
+
+  playUiSound: (type) => {
+    if (type === 'HOVER') audioService.play('UI_HOVER');
+    if (type === 'CLICK') audioService.play('UI_CLICK');
+  },
+
   // Game Lifecycle
   startNewGame: (winCondition) => {
+      audioService.play('UI_CLICK');
       get().abandonSession(); // Ensure old engine is destroyed
       const initialSessionState = createInitialSessionData(winCondition);
       engine = new GameEngine(initialSessionState); 
@@ -164,12 +200,22 @@ export const useGameStore = create<GameStore>((set, get) => ({
       const { session } = get();
       if (!session) return;
 
-      if (session.player.state === EntityState.MOVING) return;
+      if (session.player.state === EntityState.MOVING) {
+        audioService.play('ERROR');
+        return;
+      }
       
       const isCurrentlyGrowing = session.isPlayerGrowing;
-      // Note: Logic allows toggling ON 'RECOVER' even if already growing, to switch modes if implemented,
-      // but primarily toggles on/off.
-      engine.setPlayerIntent(!isCurrentlyGrowing, isCurrentlyGrowing ? null : intent);
+      const nextStateGrowing = !isCurrentlyGrowing;
+      
+      // Sound feedback for mode switching
+      if (nextStateGrowing) {
+        audioService.play('GROWTH_START');
+      } else {
+        audioService.play('UI_CLICK');
+      }
+
+      engine.setPlayerIntent(nextStateGrowing, isCurrentlyGrowing ? null : intent);
       set({ session: engine.state });
   },
 
@@ -179,8 +225,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
       const action: RechargeAction = { type: 'RECHARGE_MOVE', stateVersion: engine.state.stateVersion };
       const res = engine.applyAction(engine.state.player.id, action);
       if (res.ok) {
+        audioService.play('COIN'); // Feedback for spending
         set({ session: engine.state });
       } else {
+        audioService.play('ERROR');
         set({ toast: { message: res.reason || "Recharge Failed", type: 'error', timestamp: Date.now() } });
       }
   },
@@ -196,6 +244,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       const path = findPath({ q: session.player.q, r: session.player.r }, { q: tq, r: tr }, session.grid, session.player.playerLevel, obstacles);
       
       if (!path) {
+        audioService.play('ERROR');
         set({ toast: { message: "Path Blocked", type: 'error', timestamp: Date.now() } });
         return;
       }
@@ -210,10 +259,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
       const costCoins = (totalMoveCost - costMoves) * GAME_CONFIG.EXCHANGE_RATE_COINS_PER_MOVE;
 
       if (session.player.coins < costCoins) {
+        audioService.play('ERROR');
         set({ toast: { message: `Need ${costCoins} credits`, type: 'error', timestamp: Date.now() } });
         return;
       }
       if (costCoins > 0) {
+        audioService.play('WARNING');
         set({ pendingConfirmation: { type: 'MOVE_WITH_COINS', data: { path, costMoves, costCoins } } });
         return;
       }
@@ -221,8 +272,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
       const action: MoveAction = { type: 'MOVE', path, stateVersion: session.stateVersion };
       const res = engine.applyAction(session.player.id, action);
       if (res.ok) {
+        audioService.play('MOVE');
         set({ session: engine.state });
       } else {
+        audioService.play('ERROR');
         set({ toast: { message: res.reason || "Error", type: 'error', timestamp: Date.now() } });
       }
   },
@@ -237,13 +290,18 @@ export const useGameStore = create<GameStore>((set, get) => ({
       
       const res = engine.applyAction(session.player.id, action);
       if (res.ok) {
+        audioService.play('MOVE');
         set({ session: engine.state, pendingConfirmation: null });
       } else {
+        audioService.play('ERROR');
         set({ toast: { message: res.reason || "Error", type: 'error', timestamp: Date.now() }, pendingConfirmation: null });
       }
   },
 
-  cancelPendingAction: () => set({ pendingConfirmation: null }),
+  cancelPendingAction: () => {
+    audioService.play('UI_CLICK');
+    set({ pendingConfirmation: null });
+  },
 
   // MAIN LOOP
   tick: () => {
@@ -257,20 +315,36 @@ export const useGameStore = create<GameStore>((set, get) => ({
       // PROCESS EVENTS
       if (result.events.length > 0) {
           
+          // Audio Feedback for events
+          result.events.forEach(event => {
+            if (event.entityId === result.state.player.id) {
+               switch (event.type) {
+                 case 'LEVEL_UP':
+                   audioService.play('LEVEL_UP');
+                   break;
+                 case 'SECTOR_ACQUIRED':
+                   audioService.play('SUCCESS');
+                   break;
+                 case 'RECOVERY_USED':
+                   audioService.play('COIN');
+                   break;
+                 case 'ACTION_DENIED':
+                 case 'ERROR':
+                   audioService.play('ERROR');
+                   break;
+               }
+            }
+            if (event.type === 'VICTORY') audioService.play('SUCCESS');
+            if (event.type === 'DEFEAT') audioService.play('ERROR');
+          });
+
           // 1. Error Handling & Toasts
           const error = result.events.find(e => e.type === 'ACTION_DENIED' || e.type === 'ERROR');
           if (error) {
-              // Push error to the console log if it isn't already there
-              // Note: Systems might have already pushed to messageLog, but 'ERROR' events 
-              // from engine-level checks (like AiSystem failure) might be raw.
-              // We'll trust that the engine state now contains the logs, but we still trigger UI effects.
-              
               if (error.entityId === engine.state.player.id) {
                  newToast = { message: error.message || 'Error', type: 'error', timestamp: Date.now() };
               }
 
-              // Also ensure it is logged if it came from system level not handling it
-              // (This is a safety catch)
               const alreadyLogged = result.state.messageLog.some(l => l.timestamp === error.timestamp && l.text === error.message);
               if (!alreadyLogged && error.message) {
                   result.state.messageLog.unshift({

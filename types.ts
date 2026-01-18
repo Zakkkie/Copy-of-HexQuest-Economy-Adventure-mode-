@@ -8,6 +8,8 @@
 
 
 
+
+
 export type HexCoord = { q: number; r: number; upgrade?: boolean; intent?: 'UPGRADE' | 'RECOVER' };
 
 // Read-only view of a Hex for the Bot (Architecture Requirement)
@@ -201,6 +203,7 @@ export interface GameState {
   // Cross-session state
   leaderboard: LeaderboardEntry[];
   hasActiveSession: boolean;
+  isMuted: boolean;
 }
 
 export type MoveAction = { type: 'MOVE'; path: { q: number; r: number }[]; stateVersion?: number };

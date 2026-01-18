@@ -1,3 +1,5 @@
+
+
 import React, { useEffect, useCallback, useState, useMemo, useRef } from 'react';
 import { Stage, Layer, Line } from 'react-konva';
 import Konva from 'konva';
@@ -10,7 +12,7 @@ import Background from './Background.tsx';
 import { 
   AlertCircle, Pause, Play, Trophy, Coins, Footprints, AlertTriangle, LogOut,
   Crown, Target, TrendingUp, ChevronDown, ChevronUp, Shield, MapPin,
-  RotateCcw, RotateCw, CheckCircle2, ChevronsUp, Lock, Bot, Activity, Zap, Terminal, XCircle
+  RotateCcw, RotateCw, CheckCircle2, ChevronsUp, Lock, Bot, Activity, Zap, Terminal, XCircle, Volume2, VolumeX
 } from 'lucide-react';
 import { EXCHANGE_RATE_COINS_PER_MOVE, DIFFICULTY_SETTINGS } from '../rules/config.ts';
 import { Hex, EntityType, EntityState, LogEntry } from '../types.ts';
@@ -41,6 +43,7 @@ const GameView: React.FC = () => {
   const user = useGameStore(state => state.user);
   const toast = useGameStore(state => state.toast);
   const pendingConfirmation = useGameStore(state => state.pendingConfirmation);
+  const isMuted = useGameStore(state => state.isMuted);
 
   // Actions
   const setUIState = useGameStore(state => state.setUIState);
@@ -52,6 +55,8 @@ const GameView: React.FC = () => {
   const togglePlayerGrowth = useGameStore(state => state.togglePlayerGrowth);
   const confirmPendingAction = useGameStore(state => state.confirmPendingAction);
   const cancelPendingAction = useGameStore(state => state.cancelPendingAction);
+  const toggleMute = useGameStore(state => state.toggleMute);
+  const playUiSound = useGameStore(state => state.playUiSound);
 
   // Safety check: if session is initializing or ended, these might be null
   if (!grid || !player || !bots || !difficulty) return null;
@@ -620,8 +625,16 @@ const GameView: React.FC = () => {
 
           {/* RIGHT: Rankings + Exit */}
           <div className="absolute top-2 md:top-4 right-2 md:right-4 flex items-start gap-2 pointer-events-auto z-50">
+               {/* Sound Toggle */}
+               <button 
+                  onClick={() => { toggleMute(); playUiSound('CLICK'); }}
+                  className="w-11 h-11 flex items-center justify-center bg-slate-900/90 backdrop-blur-2xl border border-slate-700/80 rounded-2xl text-slate-400 hover:text-white hover:bg-slate-800 transition-all shadow-xl active:scale-95"
+               >
+                  {isMuted ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
+               </button>
+
                <div className={`flex flex-col bg-slate-900/90 backdrop-blur-2xl border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden transition-all duration-300 ease-in-out origin-top-right ${isRankingsOpen ? 'w-56 md:w-64' : 'w-auto'}`}>
-                   <div onClick={() => setIsRankingsOpen(!isRankingsOpen)} className="flex items-center justify-between p-2 md:p-3 cursor-pointer hover:bg-white/5 transition-colors gap-2 md:gap-4 h-11">
+                   <div onClick={() => { setIsRankingsOpen(!isRankingsOpen); playUiSound('CLICK'); }} className="flex items-center justify-between p-2 md:p-3 cursor-pointer hover:bg-white/5 transition-colors gap-2 md:gap-4 h-11">
                        <div className="flex items-center gap-2 md:gap-2.5">
                            <Trophy className="w-4 h-4 text-amber-500" />
                            {isRankingsOpen && <span className="text-[9px] md:text-[10px] font-bold text-slate-300 uppercase tracking-wider whitespace-nowrap">Live Rankings</span>}
@@ -658,7 +671,7 @@ const GameView: React.FC = () => {
                    )}
                </div>
 
-               <button onClick={() => setShowExitConfirmation(true)} className="w-11 h-11 flex items-center justify-center bg-slate-900/90 backdrop-blur-2xl border border-slate-700/80 rounded-2xl text-slate-400 hover:text-white hover:bg-slate-800 transition-all shadow-xl active:scale-95" title="Exit Session">
+               <button onClick={() => { setShowExitConfirmation(true); playUiSound('CLICK'); }} className="w-11 h-11 flex items-center justify-center bg-slate-900/90 backdrop-blur-2xl border border-slate-700/80 rounded-2xl text-slate-400 hover:text-white hover:bg-slate-800 transition-all shadow-xl active:scale-95" title="Exit Session">
                   <LogOut className="w-5 h-5" />
                </button>
           </div>
@@ -756,7 +769,7 @@ const GameView: React.FC = () => {
       </div>
 
       <div className="absolute bottom-8 w-full flex justify-center items-end gap-4 pointer-events-none z-40">
-        <button onClick={() => rotateCamera('left')} className="w-12 h-12 mb-4 bg-slate-900/80 backdrop-blur rounded-full border border-slate-700 text-slate-400 hover:text-white hover:bg-slate-800 transition-all pointer-events-auto shadow-xl active:scale-95 flex items-center justify-center"><RotateCcw className="w-5 h-5" /></button>
+        <button onClick={() => { rotateCamera('left'); playUiSound('CLICK'); }} className="w-12 h-12 mb-4 bg-slate-900/80 backdrop-blur rounded-full border border-slate-700 text-slate-400 hover:text-white hover:bg-slate-800 transition-all pointer-events-auto shadow-xl active:scale-95 flex items-center justify-center"><RotateCcw className="w-5 h-5" /></button>
         <div className="flex gap-3 items-end pointer-events-auto h-20 transition-all duration-300">
            {isPlayerGrowing ? (
               <button onClick={() => { centerOnPlayer(); togglePlayerGrowth(timeData.mode === 'RECOVERY' ? 'RECOVER' : 'UPGRADE'); }} className={`w-44 h-20 bg-slate-900/90 backdrop-blur-xl rounded-2xl relative overflow-hidden flex flex-col items-center justify-center shadow-[0_0_30px_rgba(0,0,0,0.2)] active:scale-95 transition-all group ${timeData.mode === 'RECOVERY' ? 'border border-blue-500/50' : 'border border-emerald-500/50'}`}>
@@ -791,7 +804,7 @@ const GameView: React.FC = () => {
               </>
            )}
         </div>
-        <button onClick={() => rotateCamera('right')} className="w-12 h-12 mb-4 bg-slate-900/80 backdrop-blur rounded-full border border-slate-700 text-slate-400 hover:text-white hover:bg-slate-800 transition-all pointer-events-auto shadow-xl active:scale-95 flex items-center justify-center"><RotateCw className="w-5 h-5" /></button>
+        <button onClick={() => { rotateCamera('right'); playUiSound('CLICK'); }} className="w-12 h-12 mb-4 bg-slate-900/80 backdrop-blur rounded-full border border-slate-700 text-slate-400 hover:text-white hover:bg-slate-800 transition-all pointer-events-auto shadow-xl active:scale-95 flex items-center justify-center"><RotateCw className="w-5 h-5" /></button>
       </div>
       
        {/* MOVE COST CONFIRMATION MODAL */}
@@ -823,8 +836,8 @@ const GameView: React.FC = () => {
              <h3 className="text-xl font-bold text-white mb-2">Abort Mission?</h3>
              <p className="text-slate-400 text-xs mb-6 leading-relaxed">Terminating the session will disconnect from the current sector. <br/><span className="text-red-400 font-bold">All unsaved tactical data will be lost.</span></p>
              <div className="flex gap-3">
-               <button onClick={() => setShowExitConfirmation(false)} className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 rounded-xl text-slate-300 font-bold text-xs uppercase tracking-wider transition-colors">Cancel</button>
-               <button onClick={() => { abandonSession(); setShowExitConfirmation(false); }} className="flex-1 py-3 bg-red-900/50 hover:bg-red-800/50 border border-red-800/50 rounded-xl text-red-200 hover:text-white font-bold text-xs uppercase tracking-wider shadow-lg shadow-red-900/20 transition-all">Confirm Exit</button>
+               <button onClick={() => { setShowExitConfirmation(false); playUiSound('CLICK'); }} className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 rounded-xl text-slate-300 font-bold text-xs uppercase tracking-wider transition-colors">Cancel</button>
+               <button onClick={() => { abandonSession(); setShowExitConfirmation(false); playUiSound('CLICK'); }} className="flex-1 py-3 bg-red-900/50 hover:bg-red-800/50 border border-red-800/50 rounded-xl text-red-200 hover:text-white font-bold text-xs uppercase tracking-wider shadow-lg shadow-red-900/20 transition-all">Confirm Exit</button>
              </div>
           </div>
         </div>
@@ -868,10 +881,10 @@ const GameView: React.FC = () => {
                 </div>
 
                 <div className="flex gap-4">
-                    <button onClick={abandonSession} className="flex-1 py-4 bg-slate-800 hover:bg-slate-700 rounded-xl text-slate-300 font-bold text-xs uppercase tracking-wider transition-colors">
+                    <button onClick={() => { abandonSession(); playUiSound('CLICK'); }} className="flex-1 py-4 bg-slate-800 hover:bg-slate-700 rounded-xl text-slate-300 font-bold text-xs uppercase tracking-wider transition-colors">
                         Main Menu
                     </button>
-                    <button onClick={() => { abandonSession(); setUIState('LEADERBOARD'); }} className="flex-1 py-4 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-white font-bold text-xs uppercase tracking-wider shadow-lg shadow-indigo-500/20 transition-colors">
+                    <button onClick={() => { abandonSession(); setUIState('LEADERBOARD'); playUiSound('CLICK'); }} className="flex-1 py-4 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-white font-bold text-xs uppercase tracking-wider shadow-lg shadow-indigo-500/20 transition-colors">
                         View Leaderboard
                     </button>
                 </div>
