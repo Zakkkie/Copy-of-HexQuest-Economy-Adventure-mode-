@@ -59,30 +59,44 @@ export function checkGrowthCondition(
 
   // STAIRCASE SUPPORT RULE
   if (targetLevel > 1) {
-    const supports = neighbors.filter(n => {
+    // 1. SATURATION CHECK ("The Valley Rule")
+    // If a hex is surrounded by superior infrastructure (5+ neighbors strictly higher level),
+    // it lifts up automatically without needing specific same-level supports.
+    // This prevents "dead zones" inside developed territory.
+    const highLevelNeighborsCount = neighbors.filter(n => {
        const neighborHex = grid[`${n.q},${n.r}`];
-       // Strict Equality: Neighbors must be exactly the same maxLevel as current hex to support climb.
-       return neighborHex && neighborHex.maxLevel === hex.maxLevel;
-    });
+       return neighborHex && neighborHex.maxLevel > hex.maxLevel;
+    }).length;
 
-    if (supports.length < 2) {
-      return {
-        canGrow: false, 
-        reason: `NEED 2 SUPPORTS (EXACTLY L${hex.maxLevel})`
-      };
-    }
+    const isValley = highLevelNeighborsCount >= 5;
 
-    // Occupancy Check: Max 1 support can be occupied by units
-    // Note: The player attempting to grow does NOT count as blocking support because they are on the target hex, not the support hex.
-    const occupiedSupportCount = supports.filter(s => 
-        occupiedHexes.some(o => o.q === s.q && o.r === s.r)
-    ).length;
+    // Only apply strict support rules if NOT in a valley
+    if (!isValley) {
+        const supports = neighbors.filter(n => {
+           const neighborHex = grid[`${n.q},${n.r}`];
+           // Strict Equality: Neighbors must be exactly the same maxLevel as current hex to support climb.
+           return neighborHex && neighborHex.maxLevel === hex.maxLevel;
+        });
 
-    if (occupiedSupportCount > 1) {
-        return {
-            canGrow: false,
-            reason: "SUPPORTS BLOCKED"
-        };
+        if (supports.length < 2) {
+          return {
+            canGrow: false, 
+            reason: `NEED 2 SUPPORTS (L${hex.maxLevel}) OR ENCIRCLEMENT`
+          };
+        }
+
+        // Occupancy Check: Max 1 support can be occupied by units
+        // Note: The player attempting to grow does NOT count as blocking support because they are on the target hex, not the support hex.
+        const occupiedSupportCount = supports.filter(s => 
+            occupiedHexes.some(o => o.q === s.q && o.r === s.r)
+        ).length;
+
+        if (occupiedSupportCount > 1) {
+            return {
+                canGrow: false,
+                reason: "SUPPORTS BLOCKED"
+            };
+        }
     }
   }
 
