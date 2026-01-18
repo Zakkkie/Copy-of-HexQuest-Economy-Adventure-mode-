@@ -1,9 +1,3 @@
-
-
-
-
-
-
 import { GameState, GameAction, EntityType, EntityState, ValidationResult, SessionState } from '../types';
 import { WorldIndex } from './WorldIndex';
 import { getHexKey } from '../services/hexUtils';
@@ -72,8 +66,10 @@ export class ActionProcessor {
                 const hex = state.grid[getHexKey(step.q, step.r)];
                 totalMoveCost += (hex && hex.maxLevel >= 2) ? hex.maxLevel : 1;
             }
-            const costMoves = Math.min(actor.moves, totalMoveCost);
-            const costCoins = (totalMoveCost - costMoves) * GAME_CONFIG.EXCHANGE_RATE_COINS_PER_MOVE;
+            
+            // Logic: Calculate move deficit. If we don't have enough moves, we pay in coins.
+            const movesDeficit = Math.max(0, totalMoveCost - actor.moves);
+            const costCoins = movesDeficit * GAME_CONFIG.EXCHANGE_RATE_COINS_PER_MOVE;
 
             if (actor.coins < costCoins) {
                 return { ok: false, reason: `Insufficient credits. Need ${costCoins}, have ${actor.coins}.` };
@@ -130,8 +126,11 @@ export class ActionProcessor {
             const hex = state.grid[getHexKey(step.q, step.r)];
             totalMoveCost += (hex && hex.maxLevel >= 2) ? hex.maxLevel : 1;
         }
-        const costMoves = Math.min(actor.moves, totalMoveCost);
-        const costCoins = (totalMoveCost - costMoves) * GAME_CONFIG.EXCHANGE_RATE_COINS_PER_MOVE;
+
+        // Apply simplified cost logic
+        const movesDeficit = Math.max(0, totalMoveCost - actor.moves);
+        const costCoins = movesDeficit * GAME_CONFIG.EXCHANGE_RATE_COINS_PER_MOVE;
+        const costMoves = totalMoveCost - movesDeficit;
 
         actor.moves -= costMoves;
         actor.coins -= costCoins;

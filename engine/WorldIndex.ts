@@ -23,6 +23,27 @@ export class WorldIndex {
 
   // --- Synchronization ---
 
+  /**
+   * CRITICAL: Updates internal references to match the current simulation state.
+   * Call this immediately after cloning state in GameEngine to prevent
+   * systems from reading stale entity data (coins, moves, state) via the index.
+   */
+  public syncState(state: { grid: Record<string, Hex>; player: Entity; bots: Entity[] }) {
+      this.grid = state.grid;
+      
+      // Update Entity Map with NEW object references
+      this.entities.clear();
+      const allEntities = [state.player, ...state.bots];
+      for (const e of allEntities) {
+          this.entities.set(e.id, e);
+      }
+      
+      // Note: We do NOT need to rebuild occupiedHexes here if this is called 
+      // at the start of a tick/action, because positions (q,r) haven't changed 
+      // relative to the index's knowledge yet. MovementSystem handles spatial updates.
+      // However, we MUST rebuild if the grid structure changed drastically (rare).
+  }
+
   public syncGrid(grid: Record<string, Hex>) {
       this.grid = grid;
   }
@@ -85,6 +106,7 @@ export class WorldIndex {
       }
       this.occupiedHexes.set(newKey, entityId);
       
+      // Update the reference object itself to be safe, though MovementSystem usually does this too.
       const ent = this.entities.get(entityId);
       if (ent) {
           ent.q = newQ;

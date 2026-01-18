@@ -20,28 +20,29 @@ export interface TickResult {
  * State is treated as immutable between ticks/actions.
  */
 export class GameEngine {
-  private _state: SessionState;
-  private _index: WorldIndex;
+  // Fix: Properties are nullable to handle destruction lifecycle safely without 'as any' hacks.
+  private _state: SessionState | null;
+  private _index: WorldIndex | null;
   private _systems: System[];
-  private _actionProcessor: ActionProcessor;
+  private _actionProcessor: ActionProcessor | null;
 
   constructor(initialState: SessionState) {
     // Initial deep copy is acceptable for setup
     this._state = JSON.parse(JSON.stringify(initialState));
-    this._state.stateVersion = this._state.stateVersion || 0;
+    this._state!.stateVersion = this._state!.stateVersion || 0;
     
-    this._index = new WorldIndex(this._state.grid, [this._state.player, ...this._state.bots]);
+    this._index = new WorldIndex(this._state!.grid, [this._state!.player, ...this._state!.bots]);
     this._actionProcessor = new ActionProcessor();
     
     this._systems = [
       new GrowthSystem(),
-      new AiSystem(this._actionProcessor),
+      new AiSystem(this._actionProcessor!),
       new MovementSystem(),
       new VictorySystem()
     ];
   }
 
-  public get state(): SessionState {
+  public get state(): SessionState | null {
     return this._state;
   }
 
@@ -96,14 +97,24 @@ export class GameEngine {
    * Creates a temporary state copy, applies the action, and commits it on success.
    */
   public applyAction(actorId: string, action: GameAction): ValidationResult {
-    if (!this._state) return { ok: false, reason: "Engine Destroyed" };
+    if (!this._state || !this._index || !this._actionProcessor) return { ok: false, reason: "Engine Destroyed" };
 
     const nextState = this.cloneState(this._state);
+    
+    // CRITICAL FIX: Update index to point to NEW entity objects in nextState
+    // This ensures that when ActionProcessor checks conditions (like coins), it sees the fresh data.
+    this._index.syncState(nextState);
+
     const result = this._actionProcessor.applyAction(nextState, this._index, actorId, action);
     
     if (result.ok) {
         nextState.stateVersion++;
         this._state = nextState;
+    } else {
+        // If action failed, we discard nextState. 
+        // NOTE: The index currently points to the discarded nextState entities.
+        // This is safe because the next time applyAction/processTick is called,
+        // we will immediately call syncState() again with a fresh clone of the valid this._state.
     }
 
     return result;
@@ -114,9 +125,14 @@ export class GameEngine {
    * Creates a temporary state copy, runs all systems on it, sanitizes it, and then commits it.
    */
   public processTick(): TickResult {
-    if (!this._state) return { state: {} as any, events: [] };
+    if (!this._state || !this._index) return { state: {} as any, events: [] };
 
     const nextState = this.cloneState(this._state);
+    
+    // CRITICAL FIX: Update index to point to NEW entity objects in nextState
+    // Systems (AiSystem, MovementSystem) will now read/write to the correct object references via Index lookups.
+    this._index.syncState(nextState);
+
     const tickEvents: GameEvent[] = [];
 
     for (const system of this._systems) {
@@ -166,8 +182,8 @@ export class GameEngine {
    */
   public destroy() {
     this._systems = [];
-    this._index = null as any;
-    this._state = null as any;
-    this._actionProcessor = null as any;
+    this._index = null;
+    this._state = null;
+    this._actionProcessor = null;
   }
 }
