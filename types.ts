@@ -10,6 +10,8 @@
 
 
 
+
+
 export type HexCoord = { q: number; r: number; upgrade?: boolean; intent?: 'UPGRADE' | 'RECOVER' };
 
 // Read-only view of a Hex for the Bot (Architecture Requirement)
@@ -172,6 +174,17 @@ export interface LeaderboardEntry {
   difficulty: Difficulty;
 }
 
+export interface FloatingText {
+  id: string;
+  q: number;
+  r: number;
+  text: string;
+  color: string;
+  startTime: number;
+  lifetime: number;
+  icon?: 'UP' | 'PLUS' | 'WARN' | 'COIN';
+}
+
 // Authoritative state for a single game session, managed by GameEngine
 export interface SessionState {
   stateVersion: number;
@@ -190,7 +203,8 @@ export interface SessionState {
   isPlayerGrowing: boolean; 
   playerGrowthIntent: 'RECOVER' | 'UPGRADE' | null; 
   growingBotIds: string[]; 
-  telemetry?: GameEvent[]; 
+  telemetry?: GameEvent[];
+  effects: FloatingText[]; // Visual effects layer
 }
 
 // State for the entire application, managed by Zustand

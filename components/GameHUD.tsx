@@ -195,19 +195,22 @@ const GameHUD: React.FC<GameHUDProps> = ({ hoveredHexId, onRotateCamera, onCente
     <div className="absolute inset-0 pointer-events-none z-30 select-none">
       
       {/* HEADER */}
-      <div className="absolute inset-x-0 top-0 p-3 pointer-events-none z-30">
-          <div className="max-w-7xl mx-auto w-full flex justify-between items-start">
+      <div className="absolute inset-x-0 top-0 p-2 md:p-4 pointer-events-none z-30 pt-[max(0.5rem,env(safe-area-inset-top))]">
+          <div className="max-w-7xl mx-auto w-full flex justify-between items-start gap-2">
                
                {/* LEFT: STATS PILL */}
-               <div className="pointer-events-auto flex items-center bg-slate-900/80 backdrop-blur-xl rounded-2xl border border-slate-700/50 shadow-lg overflow-hidden px-3 py-2 gap-3 md:gap-4 h-12 md:h-14">
+               <div className="pointer-events-auto flex items-center bg-slate-900/80 backdrop-blur-xl rounded-2xl border border-slate-700/50 shadow-lg overflow-hidden px-3 md:px-5 py-2 gap-2 md:gap-4 h-12 md:h-14 min-w-0">
                    {/* Rank */}
-                   <div onClick={() => { setHelpTopic('RANK'); playUiSound('CLICK'); }} className="flex items-center gap-2 cursor-help opacity-90 hover:opacity-100 group">
+                   <div onClick={() => { setHelpTopic('RANK'); playUiSound('CLICK'); }} className="flex items-center gap-1.5 md:gap-2 cursor-help opacity-90 hover:opacity-100 group shrink-0">
                        <Crown className="w-4 h-4 md:w-5 md:h-5 text-indigo-400 group-hover:text-indigo-300 drop-shadow-[0_0_8px_rgba(129,140,248,0.5)]" />
-                       <span className="text-sm md:text-lg font-black text-white">{player.playerLevel}</span>
+                       <div className="flex items-baseline">
+                         <span className="text-xs md:text-lg font-black text-white">{player.playerLevel}</span>
+                         <span className="text-[9px] md:text-xs text-slate-500 font-bold ml-px md:ml-0.5">/{winCondition?.targetLevel || '?'}</span>
+                       </div>
                    </div>
-                   <div className="w-px h-6 bg-slate-700/50"></div>
+                   <div className="w-px h-4 md:h-6 bg-slate-700/50 shrink-0"></div>
                    {/* Queue */}
-                   <div onClick={() => { setHelpTopic('QUEUE'); playUiSound('CLICK'); }} className="flex items-center gap-2 cursor-help opacity-90 hover:opacity-100 group">
+                   <div onClick={() => { setHelpTopic('QUEUE'); playUiSound('CLICK'); }} className="flex items-center gap-1.5 md:gap-2 cursor-help opacity-90 hover:opacity-100 group shrink-0">
                        <TrendingUp className="w-4 h-4 md:w-5 md:h-5 text-emerald-400 group-hover:text-emerald-300 drop-shadow-[0_0_8px_rgba(52,211,153,0.5)]" />
                        <div className="flex gap-0.5 md:gap-1">
                            {Array.from({length: queueSize}).map((_, i) => (
@@ -215,22 +218,25 @@ const GameHUD: React.FC<GameHUDProps> = ({ hoveredHexId, onRotateCamera, onCente
                            ))}
                        </div>
                    </div>
-                   <div className="w-px h-6 bg-slate-700/50"></div>
+                   <div className="w-px h-4 md:h-6 bg-slate-700/50 shrink-0"></div>
                    {/* Coins */}
-                   <div onClick={() => { setHelpTopic('COINS'); playUiSound('CLICK'); }} className="flex items-center gap-2 cursor-help opacity-90 hover:opacity-100 group">
+                   <div onClick={() => { setHelpTopic('COINS'); playUiSound('CLICK'); }} className="flex items-center gap-1.5 md:gap-2 cursor-help opacity-90 hover:opacity-100 group shrink-0">
                        <Coins className="w-4 h-4 md:w-5 md:h-5 text-amber-400 group-hover:text-amber-300 drop-shadow-[0_0_8px_rgba(251,191,36,0.5)]" />
-                       <span className="text-sm md:text-lg font-black text-white">{player.coins}</span>
+                       <div className="flex items-baseline">
+                         <span className="text-xs md:text-lg font-black text-white">{player.coins}</span>
+                         <span className="text-[9px] md:text-xs text-slate-500 font-bold ml-px md:ml-0.5">/{winCondition?.targetCoins || '?'}</span>
+                       </div>
                    </div>
-                   <div className="w-px h-6 bg-slate-700/50"></div>
+                   <div className="w-px h-4 md:h-6 bg-slate-700/50 shrink-0"></div>
                    {/* Moves */}
-                   <div onClick={() => { setHelpTopic('MOVES'); playUiSound('CLICK'); }} className="flex items-center gap-2 cursor-help opacity-90 hover:opacity-100 group">
+                   <div onClick={() => { setHelpTopic('MOVES'); playUiSound('CLICK'); }} className="flex items-center gap-1.5 md:gap-2 cursor-help opacity-90 hover:opacity-100 group shrink-0">
                        <Footprints className={`w-4 h-4 md:w-5 md:h-5 ${isMoving ? 'text-slate-200 animate-pulse' : 'text-blue-400 group-hover:text-blue-300 drop-shadow-[0_0_8px_rgba(96,165,250,0.5)]'}`} />
-                       <span className="text-sm md:text-lg font-black text-white">{player.moves}</span>
+                       <span className="text-xs md:text-lg font-black text-white">{player.moves}</span>
                    </div>
                </div>
 
                {/* RIGHT: SYSTEM CONTROLS */}
-               <div className="pointer-events-auto flex items-start gap-2">
+               <div className="pointer-events-auto flex items-start gap-1.5 md:gap-2 shrink-0">
                    <button 
                       onClick={() => { toggleMute(); playUiSound('CLICK'); }}
                       className="w-12 h-12 md:w-14 md:h-14 flex items-center justify-center bg-slate-900/80 backdrop-blur-xl border border-slate-700/50 rounded-2xl text-slate-400 hover:text-white hover:bg-slate-800 transition-all shadow-lg active:scale-95"
@@ -238,7 +244,7 @@ const GameHUD: React.FC<GameHUDProps> = ({ hoveredHexId, onRotateCamera, onCente
                       {isMuted ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
                    </button>
 
-                   <div className={`flex flex-col bg-slate-900/80 backdrop-blur-xl border border-slate-700/50 rounded-2xl shadow-2xl overflow-hidden transition-all duration-300 origin-top-right ${isRankingsOpen ? 'w-56 md:w-64' : 'w-12 md:w-14 h-12 md:h-14'}`}>
+                   <div className={`flex flex-col bg-slate-900/80 backdrop-blur-xl border border-slate-700/50 rounded-2xl shadow-2xl overflow-hidden transition-all duration-300 origin-top-right ${isRankingsOpen ? 'w-56 md:w-80' : 'w-12 md:w-14 h-12 md:h-14'}`}>
                        <div onClick={() => { setIsRankingsOpen(!isRankingsOpen); playUiSound('CLICK'); }} className={`flex items-center justify-center w-full h-12 md:h-14 cursor-pointer hover:bg-white/5 transition-colors ${isRankingsOpen ? 'border-b border-slate-700/50' : ''}`}>
                            {isRankingsOpen ? (
                                <div className="flex items-center justify-between w-full px-3">
@@ -252,16 +258,41 @@ const GameHUD: React.FC<GameHUDProps> = ({ hoveredHexId, onRotateCamera, onCente
                        
                        {isRankingsOpen && (
                            <div className="flex flex-col p-2 gap-1.5 max-h-[40vh] overflow-y-auto no-scrollbar">
+                               {/* Ranking Headers */}
+                               <div className="grid grid-cols-4 px-2 py-1 text-[9px] font-bold text-slate-500 uppercase tracking-wider">
+                                  <div className="col-span-2">Commander</div>
+                                  <div className="col-span-1 text-center">Cycle</div>
+                                  <div className="col-span-1 text-right">Credits</div>
+                               </div>
+
                                {[player, ...safeBots].sort((a, b) => (b.totalCoinsEarned || 0) - (a.totalCoinsEarned || 0)).map((e) => {
                                    const isP = e.type === 'PLAYER';
                                    const color = isP ? (user?.avatarColor || '#3b82f6') : (e.avatarColor || '#ef4444');
                                    return (
-                                       <div key={e.id} className="flex items-center justify-between p-2 rounded-lg bg-slate-950/50 border border-slate-800/50">
-                                           <div className="flex items-center gap-2 overflow-hidden">
-                                               <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: color }} />
-                                               <span className={`text-[10px] font-bold truncate ${isP ? 'text-white' : 'text-slate-400'}`}>{isP ? 'YOU' : e.id.toUpperCase()}</span>
+                                       <div key={e.id} className="grid grid-cols-4 items-center p-2 rounded-lg bg-slate-950/50 border border-slate-800/50">
+                                           {/* Column 1: Identity & Rank */}
+                                           <div className="col-span-2 flex items-center gap-2 overflow-hidden">
+                                               <div className="relative">
+                                                 <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: color }} />
+                                               </div>
+                                               <div className="flex flex-col min-w-0">
+                                                 <span className={`text-[10px] font-bold truncate ${isP ? 'text-white' : 'text-slate-400'}`}>{isP ? 'YOU' : e.id.toUpperCase()}</span>
+                                                 <span className="text-[9px] text-indigo-400 font-mono">Lvl {e.playerLevel}</span>
+                                               </div>
                                            </div>
-                                           <span className="text-[10px] font-mono text-amber-500 font-bold">{e.coins}</span>
+
+                                           {/* Column 2: Upgrade Points/Queue */}
+                                           <div className="col-span-1 flex items-center justify-center">
+                                              <div className="flex items-center gap-1 bg-slate-900/50 px-1.5 py-0.5 rounded border border-slate-800">
+                                                <TrendingUp className="w-3 h-3 text-emerald-500" />
+                                                <span className="text-[9px] font-mono font-bold text-slate-300">{e.recentUpgrades.length}</span>
+                                              </div>
+                                           </div>
+
+                                           {/* Column 3: Coins */}
+                                           <div className="col-span-1 text-right">
+                                              <span className="text-[10px] font-mono text-amber-500 font-bold">{e.coins}</span>
+                                           </div>
                                        </div>
                                    );
                                })}

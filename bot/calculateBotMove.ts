@@ -145,7 +145,8 @@ export const calculateBotMove = (
        }
 
        // 3. Try top candidates (Anti-block logic)
-       // Iterate through top 3 candidates to find a reachable one
+       // Iterate through top 3 candidates to find a reachable one.
+       // This fixes "Tunnel Vision" where a bot would stare at a blocked best-candidate forever.
        for (const candidate of candidates.slice(0, 3)) {
            const path = findPath(
                {q:bot.q, r:bot.r}, 
@@ -157,6 +158,7 @@ export const calculateBotMove = (
            
            if (path) {
                const cost = calculatePathCost(path);
+               // We only move if we can afford it.
                if (bot.coins >= cost.coins) {
                    return { 
                        action: { type: 'MOVE', path, stateVersion }, 
@@ -364,6 +366,13 @@ export const calculateBotMove = (
       if (isBlocked && h.id !== currentHexKey) continue;
 
       let score = 100;
+
+      // --- RNG VARIATION ---
+      // Fix for bots clustering in the same direction early game.
+      if (isEarlyGame) {
+          score += (Math.random() - 0.5) * 30;
+      }
+      
       const dist = cubeDistance(bot, h);
       score -= dist * 4;
 

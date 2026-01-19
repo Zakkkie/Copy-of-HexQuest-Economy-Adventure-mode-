@@ -1,4 +1,3 @@
-
 import React, { useEffect, useRef, useMemo } from 'react';
 import { Group, Path, Shape } from 'react-konva';
 import Konva from 'konva';
@@ -10,9 +9,9 @@ import { useGameStore } from '../store.ts';
 interface HexagonVisualProps {
   hex: Hex;
   rotation: number;
-  isPlayerNeighbor: boolean;
   playerRank: number;
   isOccupied: boolean;
+  isSelected: boolean; 
   onHexClick: (q: number, r: number) => void;
   onHover: (id: string | null) => void;
 }
@@ -34,9 +33,10 @@ const LEVEL_COLORS: Record<number, { fill: string; stroke: string; side: string 
 
 const LOCK_PATH = "M12 1a5 5 0 0 0-5 5v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2h-1V6a5 5 0 0 0-5-5zm0 2a3 3 0 0 1 3 3v2H9V6a3 3 0 0 1 3-3z";
 
-const HexagonVisual: React.FC<HexagonVisualProps> = React.memo(({ hex, rotation, isPlayerNeighbor, playerRank, isOccupied, onHexClick, onHover }) => {
+const HexagonVisual: React.FC<HexagonVisualProps> = React.memo(({ hex, rotation, playerRank, isOccupied, isSelected, onHexClick, onHover }) => {
   const groupRef = useRef<Konva.Group>(null);
   const progressShapeRef = useRef<Konva.Shape>(null);
+  const selectionRef = useRef<Konva.Path>(null);
   
   const { x, y } = hexToPixel(hex.q, hex.r, rotation);
   const levelIndex = Math.min(hex.maxLevel, 11);
@@ -46,11 +46,6 @@ const HexagonVisual: React.FC<HexagonVisualProps> = React.memo(({ hex, rotation,
   let strokeColor = colorSet.stroke;
   let sideColor = colorSet.side;
   let strokeWidth = 1;
-
-  if (isPlayerNeighbor) {
-    strokeColor = '#3b82f6';
-    strokeWidth = 2;
-  }
 
   const hexHeight = 10 + (hex.maxLevel * 6);
   const offsetY = -hexHeight;
@@ -62,24 +57,30 @@ const HexagonVisual: React.FC<HexagonVisualProps> = React.memo(({ hex, rotation,
   const isLocked = hex.maxLevel > playerRank;
 
   // Calculate points for geometry
-  const { topPoints, sortedFaces } = useMemo(() => {
-    const getPoint = (i: number, cy: number) => {
+  const { topPoints, sortedFaces, selectionPathData } = useMemo(() => {
+    const getPoint = (i: number, cy: number, radius: number = HEX_SIZE) => {
         const angle_deg = 60 * i + 30;
         const angle_rad = (angle_deg * Math.PI) / 180 + (rotation * Math.PI) / 180;
         return {
-            x: HEX_SIZE * Math.cos(angle_rad),
-            y: cy + HEX_SIZE * Math.sin(angle_rad) * 0.8 // Squash Y
+            x: radius * Math.cos(angle_rad),
+            y: cy + radius * Math.sin(angle_rad) * 0.8 // Squash Y
         };
     };
 
     const tops = [];
     const bottoms = [];
     const faces = [];
+    const selectionTops = [];
+    
+    // Inset the selection ring so it sits INSIDE the hex face
+    const SELECTION_INSET = 5; 
+    const selRadius = Math.max(0, HEX_SIZE - SELECTION_INSET);
 
     // Generate vertices
     for (let i = 0; i < 6; i++) {
-        tops.push(getPoint(i, offsetY));
-        bottoms.push(getPoint(i, 0));
+        tops.push(getPoint(i, offsetY, HEX_SIZE));
+        bottoms.push(getPoint(i, 0, HEX_SIZE));
+        selectionTops.push(getPoint(i, offsetY, selRadius));
     }
 
     // Generate Face Quads (Walls)
@@ -98,8 +99,12 @@ const HexagonVisual: React.FC<HexagonVisualProps> = React.memo(({ hex, rotation,
 
     faces.sort((a, b) => a.depth - b.depth);
     const topPathPoints = tops.flatMap(p => [p.x, p.y]);
+    
+    // Create the path string for the inner selection ring
+    const sp = selectionTops;
+    const selectionPathData = `M ${sp[0].x} ${sp[0].y} L ${sp[1].x} ${sp[1].y} L ${sp[2].x} ${sp[2].y} L ${sp[3].x} ${sp[3].y} L ${sp[4].x} ${sp[4].y} L ${sp[5].x} ${sp[5].y} Z`;
 
-    return { topPoints: topPathPoints, sortedFaces: faces };
+    return { topPoints: topPathPoints, sortedFaces: faces, selectionPathData };
   }, [rotation, offsetY]);
 
 
@@ -113,13 +118,13 @@ const HexagonVisual: React.FC<HexagonVisualProps> = React.memo(({ hex, rotation,
   useEffect(() => {
     if (!groupRef.current) return;
     const node = groupRef.current;
-    const layer = node.getLayer();
     
-    if (isGrowing && layer) {
+    // Handle Growing Bounce
+    if (isGrowing) {
        const anim = new Konva.Animation((frame) => {
           const scale = 1 + (Math.sin(frame!.time / 200) * 0.05);
           node.scaleY(scale);
-       }, layer);
+       }, node.getLayer());
        anim.start();
        return () => { 
            anim.stop(); 
@@ -134,8 +139,6 @@ const HexagonVisual: React.FC<HexagonVisualProps> = React.memo(({ hex, rotation,
   useEffect(() => {
       const shape = progressShapeRef.current;
       if (shape && isGrowing) {
-          // Animate the 'visualProgress' attribute from current to new target
-          // We use 0.95s to be just under the 1s tick rate
           const tween = new Konva.Tween({
               node: shape,
               duration: 0.95, 
@@ -146,6 +149,29 @@ const HexagonVisual: React.FC<HexagonVisualProps> = React.memo(({ hex, rotation,
           return () => tween.destroy();
       }
   }, [progressPercent, isGrowing]);
+
+  // SELECTION ANIMATION (Shimmering Pulse)
+  useEffect(() => {
+      const selectionNode = selectionRef.current;
+      if (selectionNode && isSelected) {
+          selectionNode.strokeWidth(2);
+          selectionNode.shadowBlur(5);
+          selectionNode.opacity(0.8);
+
+          const tween = new Konva.Tween({
+              node: selectionNode,
+              duration: 1.2,
+              shadowBlur: 15, // Intensify glow
+              opacity: 1,     // Brighten
+              strokeWidth: 3, // Slight thicken pulse
+              yoyo: true,
+              repeat: -1,     // Loop forever
+              easing: Konva.Easings.EaseInOut,
+          });
+          tween.play();
+          return () => { tween.destroy(); }
+      }
+  }, [isSelected]);
 
   return (
     <Group 
@@ -186,6 +212,22 @@ const HexagonVisual: React.FC<HexagonVisualProps> = React.memo(({ hex, rotation,
          shadowOffset={{x: 0, y: 10}}
       />
 
+      {/* 3. SELECTION HIGHLIGHT (Distinct Visual) */}
+      {isSelected && (
+          <Path
+            ref={selectionRef}
+            data={selectionPathData}
+            stroke="#22d3ee" // Cyan-400 (Bright Neon)
+            strokeWidth={2} // Thin solid line
+            fillEnabled={false}
+            perfectDrawEnabled={false}
+            shadowColor="#22d3ee" // Matching glow
+            shadowBlur={5}
+            shadowOpacity={1}
+            listening={false}
+          />
+      )}
+
       {isLocked && (
         <Group x={0} y={offsetY - 5} opacity={0.9} listening={false}>
           <Path
@@ -204,7 +246,6 @@ const HexagonVisual: React.FC<HexagonVisualProps> = React.memo(({ hex, rotation,
         <Group x={0} y={offsetY - 15} listening={false}>
           <Shape
             ref={progressShapeRef}
-            // Initialize custom attribute
             visualProgress={progressPercent}
             sceneFunc={(ctx, shape) => {
                 const p = shape.getAttr('visualProgress') || 0;
@@ -219,7 +260,6 @@ const HexagonVisual: React.FC<HexagonVisualProps> = React.memo(({ hex, rotation,
                 
                 ctx.beginPath();
                 ctx.moveTo(-15, 0);
-                // Use interpolated value 'p' instead of jumpy 'progressPercent'
                 ctx.lineTo(-15 + (30 * p), 0);
                 ctx.strokeStyle = isLocked ? "#f59e0b" : "#10b981";
                 ctx.lineWidth = 4;
@@ -236,9 +276,9 @@ const HexagonVisual: React.FC<HexagonVisualProps> = React.memo(({ hex, rotation,
 interface SmartHexagonProps {
   id: string;
   rotation: number;
-  isPlayerNeighbor: boolean;
   playerRank: number; 
   isOccupied: boolean;
+  isSelected: boolean; 
   onHexClick: (q: number, r: number) => void;
   onHover: (id: string | null) => void;
 }

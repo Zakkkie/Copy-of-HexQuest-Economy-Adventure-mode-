@@ -1,6 +1,6 @@
 
-import React, { useEffect, useCallback, useState, useMemo, useRef } from 'react';
-import { Stage, Layer, Line } from 'react-konva';
+import React, { useEffect, useCallback, useState, useMemo, useRef, useLayoutEffect } from 'react';
+import { Stage, Layer, Line, Group, Text } from 'react-konva';
 import Konva from 'konva';
 import { useGameStore } from '../store.ts';
 import { getHexKey, getNeighbors, hexToPixel } from '../services/hexUtils.ts';
@@ -9,7 +9,7 @@ import Unit from './Unit.tsx';
 import Background from './Background.tsx';
 import GameHUD from './GameHUD.tsx';
 import { EXCHANGE_RATE_COINS_PER_MOVE } from '../rules/config.ts';
-import { Hex, EntityType, EntityState } from '../types.ts';
+import { Hex, EntityType, EntityState, FloatingText } from '../types.ts';
 
 const VIEWPORT_PADDING = 300; 
 
@@ -19,11 +19,65 @@ type RenderItem =
   | { type: 'UNIT'; id: string; depth: number; q: number; r: number; isPlayer: boolean }
   | { type: 'CONN'; id: string; depth: number; points: number[]; color: string; dash: number[]; opacity: number };
 
+const FloatingEffect: React.FC<{ effect: FloatingText; rotation: number }> = React.memo(({ effect, rotation }) => {
+    const groupRef = useRef<Konva.Group>(null);
+    const { x, y } = hexToPixel(effect.q, effect.r, rotation);
+    
+    useLayoutEffect(() => {
+        const node = groupRef.current;
+        if (!node) return;
+
+        // Init
+        node.position({ x, y: y - 40 }); // Start slightly above hex
+        node.opacity(0);
+        node.scale({ x: 0.5, y: 0.5 });
+
+        // Animation
+        const tween = new Konva.Tween({
+            node: node,
+            y: y - 100, // Float up
+            opacity: 0,
+            scaleX: 1.2,
+            scaleY: 1.2,
+            duration: effect.lifetime / 1000,
+            easing: Konva.Easings.EaseOut,
+        });
+        
+        // Initial pop
+        node.to({ opacity: 1, scaleX: 1, scaleY: 1, duration: 0.2 });
+
+        tween.play();
+
+        return () => tween.destroy();
+    }, [effect, x, y]);
+
+    return (
+        <Group ref={groupRef} listening={false}>
+            <Text
+                text={effect.text}
+                fontSize={16}
+                fontFamily="monospace"
+                fontStyle="bold"
+                fill={effect.color}
+                x={-50} 
+                width={100}
+                align="center"
+                shadowColor={effect.color}
+                shadowBlur={10}
+                shadowOpacity={0.8}
+                shadowOffset={{ x: 0, y: 0 }}
+            />
+        </Group>
+    );
+});
+
 const GameView: React.FC = () => {
   // --- STATE SELECTION ---
   const grid = useGameStore(state => state.session?.grid);
   const player = useGameStore(state => state.session?.player);
   const bots = useGameStore(state => state.session?.bots);
+  const effects = useGameStore(state => state.session?.effects); // Visual Effects
+  const isPlayerGrowing = useGameStore(state => state.session?.isPlayerGrowing);
   
   const tick = useGameStore(state => state.tick);
   const movePlayer = useGameStore(state => state.movePlayer);
@@ -43,6 +97,7 @@ const GameView: React.FC = () => {
 
   // Interaction State
   const [hoveredHexId, setHoveredHexId] = useState<string | null>(null);
+  const [selectedHexId, setSelectedHexId] = useState<string | null>(null);
 
   // Game Loop
   useEffect(() => {
@@ -92,6 +147,11 @@ const GameView: React.FC = () => {
       y: (dimensions.height / 2) - (py * prev.scale)
     }));
   }, [player.q, player.r, dimensions, cameraRotation]);
+
+  const handleHexClick = useCallback((q: number, r: number) => {
+      setSelectedHexId(getHexKey(q, r));
+      movePlayer(q, r);
+  }, [movePlayer]);
 
   const handleWheel = useCallback((e: Konva.KonvaEventObject<WheelEvent>) => {
     e.evt.preventDefault();
@@ -159,9 +219,6 @@ const GameView: React.FC = () => {
   };
 
   const neighbors = useMemo(() => getNeighbors(player.q, player.r), [player.q, player.r]);
-  const playerNeighborKeys = useMemo(() => {
-    return new Set(neighbors.map(n => getHexKey(n.q, n.r)));
-  }, [neighbors]);
 
   const safeBots = useMemo(() => (bots || []).filter(b => b && typeof b.q === 'number' && typeof b.r === 'number'), [bots]);
   const isMoving = player.state === EntityState.MOVING;
@@ -181,7 +238,14 @@ const GameView: React.FC = () => {
         if (!hex) continue;
         const { x, y } = hexToPixel(hex.q, hex.r, cameraRotation);
         if (x < visibleMinX || x > visibleMaxX || y < visibleMinY || y > visibleMaxY) continue; 
-        items.push({ type: 'HEX', id: hex.id, depth: y, q: hex.q, r: hex.r });
+        
+        items.push({ 
+            type: 'HEX', 
+            id: hex.id, 
+            depth: y, 
+            q: hex.q, 
+            r: hex.r
+        });
      }
 
      const allUnits = [{ ...player, isPlayer: true }, ...safeBots.map(b => ({ ...b, isPlayer: false }))];
@@ -233,7 +297,7 @@ const GameView: React.FC = () => {
          }
      }
 
-     if (!isMoving) {
+     if (!isMoving && !isPlayerGrowing) {
         const startHex = grid[getHexKey(player.q, player.r)];
         const startLevel = startHex ? startHex.maxLevel : 0;
         neighbors.forEach(neighbor => {
@@ -266,7 +330,7 @@ const GameView: React.FC = () => {
         });
      }
      return items.sort((a, b) => a.depth - b.depth);
-  }, [grid, player, safeBots, cameraRotation, isMoving, playerNeighborKeys, viewState, dimensions]);
+  }, [grid, player, safeBots, cameraRotation, isMoving, isPlayerGrowing, viewState, dimensions, neighbors]);
 
   // --- RENDER ---
   return (
@@ -300,7 +364,18 @@ const GameView: React.FC = () => {
             {renderList.map((item) => {
                 if (item.type === 'HEX') {
                     const isOccupied = (item.q === player.q && item.r === player.r) || safeBots.some(b => b.q === item.q && b.r === item.r);
-                    return <Hexagon key={item.id} id={item.id} rotation={cameraRotation} isPlayerNeighbor={playerNeighborKeys.has(item.id)} playerRank={player.playerLevel} isOccupied={isOccupied} onHexClick={movePlayer} onHover={setHoveredHexId} />;
+                    return (
+                        <Hexagon 
+                            key={item.id} 
+                            id={item.id} 
+                            rotation={cameraRotation} 
+                            playerRank={player.playerLevel} 
+                            isOccupied={isOccupied} 
+                            isSelected={item.id === selectedHexId} 
+                            onHexClick={handleHexClick} 
+                            onHover={setHoveredHexId} 
+                        />
+                    );
                 } else if (item.type === 'UNIT') {
                     const unit = item.isPlayer ? player : safeBots.find(b => b.id === item.id);
                     if (!unit) return null;
@@ -312,6 +387,11 @@ const GameView: React.FC = () => {
                 }
                 return null;
             })}
+            
+            {/* Visual Effects Layer (Always Top) */}
+            {effects && effects.map((eff) => (
+                <FloatingEffect key={eff.id} effect={eff} rotation={cameraRotation} />
+            ))}
           </Layer>
         </Stage>
       </div>

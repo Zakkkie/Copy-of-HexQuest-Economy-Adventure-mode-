@@ -1,6 +1,6 @@
 
 import { create } from 'zustand';
-import { GameState, Entity, Hex, EntityType, UIState, WinCondition, LeaderboardEntry, EntityState, MoveAction, RechargeAction, SessionState, LogEntry } from './types.ts';
+import { GameState, Entity, Hex, EntityType, UIState, WinCondition, LeaderboardEntry, EntityState, MoveAction, RechargeAction, SessionState, LogEntry, FloatingText } from './types.ts';
 import { GAME_CONFIG } from './rules/config.ts';
 import { getHexKey, getNeighbors, findPath } from './services/hexUtils.ts';
 import { GameEngine } from './engine/GameEngine.ts';
@@ -108,7 +108,8 @@ const createInitialSessionData = (winCondition: WinCondition): SessionState => {
     isPlayerGrowing: false,
     playerGrowthIntent: null,
     growingBotIds: [],
-    telemetry: []
+    telemetry: [],
+    effects: [] // Visual effects layer
   };
 };
 
@@ -300,15 +301,24 @@ export const useGameStore = create<GameStore>((set, get) => ({
       
       const result = engine.processTick();
       
-      // OPTIMIZATION (Updated): Update every tick (1s) for smooth visual progress.
-      // 1Hz updates are cheap enough for React, and required for smooth progress bar transitions.
+      // Cleanup old visual effects (1.2s lifetime)
+      const now = Date.now();
+      if (result.state.effects) {
+          result.state.effects = result.state.effects.filter(e => now - e.startTime < e.lifetime);
+      } else {
+          result.state.effects = [];
+      }
+
       const hasEvents = result.events.length > 0;
       const shouldUpdateUI = true; 
       
-      // Always play audio immediately regardless of React Render
+      // Process Events into Effects & Audio
       if (hasEvents) {
           result.events.forEach(event => {
-            if (event.entityId === result.state.player.id) {
+            const isPlayer = event.entityId === result.state.player.id;
+            
+            // Audio Feedback
+            if (isPlayer) {
                switch (event.type) {
                  case 'LEVEL_UP': audioService.play('LEVEL_UP'); break;
                  case 'SECTOR_ACQUIRED': audioService.play('SUCCESS'); break;
@@ -319,6 +329,62 @@ export const useGameStore = create<GameStore>((set, get) => ({
             }
             if (event.type === 'VICTORY') audioService.play('SUCCESS');
             if (event.type === 'DEFEAT') audioService.play('ERROR');
+
+            // Visual Effects (Floating Text)
+            // Only show effects for Player or near Player? 
+            // For now, show all but style Player's differently or prominently.
+            if (event.entityId) {
+                const entity = result.state.player.id === event.entityId 
+                    ? result.state.player 
+                    : result.state.bots.find(b => b.id === event.entityId);
+
+                if (entity) {
+                    let text = '';
+                    let color = '#ffffff';
+                    let icon: FloatingText['icon'] = undefined;
+
+                    switch (event.type) {
+                        case 'LEVEL_UP':
+                            text = isPlayer ? "RANK UP!" : "RIVAL UP!";
+                            color = isPlayer ? "#fbbf24" : "#f87171"; // Amber or Red
+                            icon = 'UP';
+                            break;
+                        case 'SECTOR_ACQUIRED':
+                            text = isPlayer ? "ACQUIRED" : "EXPANSION";
+                            color = isPlayer ? "#38bdf8" : "#f87171"; // Cyan or Red
+                            icon = 'PLUS';
+                            break;
+                        case 'RECOVERY_USED':
+                            if (isPlayer) {
+                                text = "+MOVES";
+                                color = "#34d399"; // Emerald
+                                icon = 'COIN';
+                            }
+                            break;
+                        case 'ACTION_DENIED':
+                        case 'ERROR':
+                            if (isPlayer) {
+                                text = "DENIED";
+                                color = "#ef4444"; // Red
+                                icon = 'WARN';
+                            }
+                            break;
+                    }
+
+                    if (text) {
+                        result.state.effects.push({
+                            id: `fx-${Date.now()}-${Math.random()}`,
+                            q: entity.q,
+                            r: entity.r,
+                            text,
+                            color,
+                            icon,
+                            startTime: now,
+                            lifetime: 1200 // 1.2s
+                        });
+                    }
+                }
+            }
           });
       }
 
@@ -345,7 +411,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
               }
           }
           
-          // 2. Recovery Toast
+          // 2. Recovery Toast (Logic already handled by effects, but keep Toast for persistence)
           const recovery = result.events.find(e => e.type === 'RECOVERY_USED' && e.entityId === engine.state.player.id);
           if (recovery) {
              newToast = { message: recovery.message || 'Supplies Recovered', type: 'success', timestamp: Date.now() };
