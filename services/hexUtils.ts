@@ -1,3 +1,4 @@
+
 import { Hex, HexCoord } from '../types';
 import { GAME_CONFIG, getLevelConfig, SAFETY_CONFIG } from '../rules/config';
 
@@ -7,13 +8,35 @@ export const getCoordinatesFromKey = (key: string): HexCoord => {
   return { q, r };
 };
 
+// --- OPTIMIZATION: Cache Math Constants ---
+const SQRT_3 = Math.sqrt(3);
+const SQRT_3_DIV_2 = SQRT_3 / 2;
+const ONE_POINT_FIVE = 1.5;
+const DEG_TO_RAD = Math.PI / 180;
+
 export const hexToPixel = (q: number, r: number, rotationDegrees: number = 0): { x: number, y: number } => {
-  const rawX = GAME_CONFIG.HEX_SIZE * (Math.sqrt(3) * q + Math.sqrt(3) / 2 * r);
-  const rawY = GAME_CONFIG.HEX_SIZE * (3 / 2 * r);
-  const angleRad = (rotationDegrees * Math.PI) / 180;
+  const size = GAME_CONFIG.HEX_SIZE;
+  
+  // Pre-calculate raw grid position without rotation
+  const rawX = size * (SQRT_3 * q + SQRT_3_DIV_2 * r);
+  const rawY = size * (ONE_POINT_FIVE * r);
+
+  // Fast path: No rotation (common case)
+  if (rotationDegrees === 0) {
+    return { 
+      x: rawX, 
+      y: rawY * 0.8 // Apply perspective squash
+    };
+  }
+
+  // Rotate
+  const angleRad = rotationDegrees * DEG_TO_RAD;
+  const cos = Math.cos(angleRad);
+  const sin = Math.sin(angleRad);
+
   return { 
-    x: rawX * Math.cos(angleRad) - rawY * Math.sin(angleRad), 
-    y: (rawX * Math.sin(angleRad) + rawY * Math.cos(angleRad)) * 0.8 
+    x: rawX * cos - rawY * sin, 
+    y: (rawX * sin + rawY * cos) * 0.8 
   };
 };
 

@@ -145,7 +145,7 @@ const Unit: React.FC<UnitProps> = React.memo(({ q, r, type, color, rotation, hex
             node: node,
             x,
             y,
-            duration: 0.3,
+            duration: 0.6, // Smoother glide
             easing: Konva.Easings.EaseInOut,
             onFinish: () => { posTweenRef.current = null; }
         });
@@ -166,7 +166,7 @@ const Unit: React.FC<UnitProps> = React.memo(({ q, r, type, color, rotation, hex
          heightTweenRef.current = new Konva.Tween({
             node: elevationNode,
             y: zOffset,
-            duration: 0.3, // Sync with movement
+            duration: 0.6, // Sync with movement
             easing: Konva.Easings.EaseInOut,
              onFinish: () => { heightTweenRef.current = null; }
          });

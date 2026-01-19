@@ -1,21 +1,15 @@
 
-
 import React, { useEffect, useCallback, useState, useMemo, useRef } from 'react';
 import { Stage, Layer, Line } from 'react-konva';
 import Konva from 'konva';
 import { useGameStore } from '../store.ts';
-import { getHexKey, getNeighbors, getSecondsToGrow, hexToPixel, findPath } from '../services/hexUtils.ts';
-import { checkGrowthCondition } from '../rules/growth.ts';
+import { getHexKey, getNeighbors, hexToPixel } from '../services/hexUtils.ts';
 import Hexagon from './Hexagon.tsx'; 
 import Unit from './Unit.tsx';
 import Background from './Background.tsx';
-import { 
-  AlertCircle, Pause, Play, Trophy, Coins, Footprints, AlertTriangle, LogOut,
-  Crown, Target, TrendingUp, ChevronDown, ChevronUp, Shield, MapPin,
-  RotateCcw, RotateCw, CheckCircle2, ChevronsUp, Lock, Bot, Activity, Zap, Terminal, XCircle, Volume2, VolumeX, HelpCircle, Info
-} from 'lucide-react';
-import { EXCHANGE_RATE_COINS_PER_MOVE, DIFFICULTY_SETTINGS } from '../rules/config.ts';
-import { Hex, EntityType, EntityState, LogEntry } from '../types.ts';
+import GameHUD from './GameHUD.tsx';
+import { EXCHANGE_RATE_COINS_PER_MOVE } from '../rules/config.ts';
+import { Hex, EntityType, EntityState } from '../types.ts';
 
 const VIEWPORT_PADDING = 300; 
 
@@ -26,101 +20,36 @@ type RenderItem =
   | { type: 'CONN'; id: string; depth: number; points: number[]; color: string; dash: number[]; opacity: number };
 
 const GameView: React.FC = () => {
-  // --- STATE SELECTION (Optimized Selectors) ---
+  // --- STATE SELECTION ---
   const grid = useGameStore(state => state.session?.grid);
   const player = useGameStore(state => state.session?.player);
   const bots = useGameStore(state => state.session?.bots);
-  const winCondition = useGameStore(state => state.session?.winCondition);
-  const gameStatus = useGameStore(state => state.session?.gameStatus);
-  const messageLog = useGameStore(state => state.session?.messageLog);
-  const botActivityLog = useGameStore(state => state.session?.botActivityLog);
-  const isPlayerGrowing = useGameStore(state => state.session?.isPlayerGrowing);
-  const playerGrowthIntent = useGameStore(state => state.session?.playerGrowthIntent);
-  const sessionStartTime = useGameStore(state => state.session?.sessionStartTime);
-  const difficulty = useGameStore(state => state.session?.difficulty);
-
-  // Global UI State
-  const user = useGameStore(state => state.user);
-  const toast = useGameStore(state => state.toast);
-  const pendingConfirmation = useGameStore(state => state.pendingConfirmation);
-  const isMuted = useGameStore(state => state.isMuted);
-
-  // Actions
-  const setUIState = useGameStore(state => state.setUIState);
-  const hideToast = useGameStore(state => state.hideToast);
-  const showToast = useGameStore(state => state.showToast);
-  const abandonSession = useGameStore(state => state.abandonSession);
+  
   const tick = useGameStore(state => state.tick);
   const movePlayer = useGameStore(state => state.movePlayer);
-  const togglePlayerGrowth = useGameStore(state => state.togglePlayerGrowth);
-  const confirmPendingAction = useGameStore(state => state.confirmPendingAction);
-  const cancelPendingAction = useGameStore(state => state.cancelPendingAction);
-  const toggleMute = useGameStore(state => state.toggleMute);
-  const playUiSound = useGameStore(state => state.playUiSound);
-
-  // Safety check: if session is initializing or ended, these might be null
-  if (!grid || !player || !bots || !difficulty) return null;
+  const hideToast = useGameStore(state => state.hideToast);
+  const toast = useGameStore(state => state.toast);
   
-  const queueSize = DIFFICULTY_SETTINGS[difficulty]?.queueSize || 3;
-
-  // Dimensions
-  const [dimensions, setDimensions] = useState({ 
-    width: window.innerWidth, 
-    height: window.innerHeight 
-  });
-
-  // Viewport
-  const [viewState, setViewState] = useState({
-    x: window.innerWidth / 2,
-    y: window.innerHeight / 2,
-    scale: 1
-  });
-
-  // Camera Rotation (Degrees)
+  if (!grid || !player || !bots) return null;
+  
+  // Dimensions & Viewport
+  const [dimensions, setDimensions] = useState({ width: window.innerWidth, height: window.innerHeight });
+  const [viewState, setViewState] = useState({ x: window.innerWidth / 2, y: window.innerHeight / 2, scale: 1 });
   const [cameraRotation, setCameraRotation] = useState(0);
   const targetRotationRef = useRef(0); 
-
-  // Mouse Interaction Refs
   const isRotating = useRef(false);
   const lastMouseX = useRef(0);
-
-  // Movement Tracking for Z-Index Stabilization
   const movementTracker = useRef<Record<string, { lastQ: number; lastR: number; fromQ: number; fromR: number; startTime: number }>>({});
 
-  // UI Local State
-  const [showExitConfirmation, setShowExitConfirmation] = useState(false);
-  const [isRankingsOpen, setIsRankingsOpen] = useState(window.innerWidth >= 768);
+  // Interaction State
   const [hoveredHexId, setHoveredHexId] = useState<string | null>(null);
-  const [helpTopic, setHelpTopic] = useState<'RANK' | 'QUEUE' | 'COINS' | 'MOVES' | null>(null);
-  const consoleRef = useRef<HTMLDivElement>(null);
 
-  // --- CONSOLE LOG MERGING ---
-  // Merge System/Player logs with Bot logs into a single unified stream
-  const unifiedLogs = useMemo(() => {
-    const sysLogs = (messageLog || []).map(l => ({ ...l, isBot: false }));
-    
-    // Convert BotLogEntry to LogEntry format for unification
-    const botLogs = (botActivityLog || []).map(l => ({
-        id: `bot-${l.botId}-${l.timestamp}`,
-        text: `[${l.action}] ${l.reason} ${l.target ? '@ ' + l.target : ''}`,
-        type: 'DEBUG' as const, // Bot thoughts are debug level
-        source: l.botId,
-        timestamp: l.timestamp,
-        isBot: true,
-        botColor: bots.find(b => b.id === l.botId)?.avatarColor
-    }));
-
-    // Merge and Sort by Timestamp (Newest First)
-    return [...sysLogs, ...botLogs].sort((a, b) => b.timestamp - a.timestamp).slice(0, 100);
-  }, [messageLog, botActivityLog, bots]);
-
-  // Game Loop (Tick)
+  // Game Loop
   useEffect(() => {
     const interval = setInterval(tick, 1000);
     return () => clearInterval(interval);
   }, [tick]);
 
-  // Toast Auto-Hide
   useEffect(() => {
     if (toast) {
       const timer = setTimeout(hideToast, 4000);
@@ -128,176 +57,13 @@ const GameView: React.FC = () => {
     }
   }, [toast, hideToast]);
 
-  // Resize Handler
   useEffect(() => {
-    const handleResize = () => {
-      setDimensions({ width: window.innerWidth, height: window.innerHeight });
-    };
+    const handleResize = () => setDimensions({ width: window.innerWidth, height: window.innerHeight });
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // Derived State - SAFE GUARDS ADDED HERE
-  const currentHex = grid[getHexKey(player.q, player.r)];
-  const neighbors = useMemo(() => getNeighbors(player.q, player.r), [player.q, player.r]);
-  
-  const safeBots = useMemo(() => (bots || []).filter(b => b && typeof b.q === 'number' && typeof b.r === 'number'), [bots]);
-  const botPositions = useMemo(() => safeBots.map(b => ({ q: b.q, r: b.r })), [safeBots]);
-  
-  const isMoving = player.state === EntityState.MOVING;
-  const canRecover = !player.recoveredCurrentHex;
-
-  const growthCondition = useMemo(() => {
-    if (!currentHex) return { canGrow: false, reason: 'Invalid Hex' };
-    return checkGrowthCondition(currentHex, player, neighbors, grid, botPositions, queueSize);
-  }, [currentHex, player, grid, neighbors, botPositions, queueSize]);
-
-  const upgradeCondition = useMemo(() => {
-    if (!currentHex) return { canGrow: false, reason: 'Invalid Hex' };
-    const simulatedHex = { ...currentHex, currentLevel: Math.max(0, currentHex.maxLevel) };
-    return checkGrowthCondition(simulatedHex, player, neighbors, grid, botPositions, queueSize);
-  }, [currentHex, player, grid, neighbors, botPositions, queueSize]);
-
-  const canUpgrade = upgradeCondition.canGrow; 
-
-  const timeData = useMemo(() => {
-    if (!currentHex) return { totalNeeded: 1, totalDone: 0, percent: 0, mode: 'IDLE' };
-    
-    // Determine what we are calculating progress FOR
-    // If player explicitly wants to recover, use Recovery Mode
-    const isRecovering = playerGrowthIntent === 'RECOVER';
-    const isUpgrading = playerGrowthIntent === 'UPGRADE' || (!isRecovering && canUpgrade);
-
-    let totalNeeded = 0;
-    let mode = 'IDLE';
-
-    if (isRecovering) {
-        // RECOVERY TIME
-        totalNeeded = getSecondsToGrow(currentHex.maxLevel);
-        mode = 'RECOVERY';
-    } else {
-        // UPGRADE TIME
-        // Calculate remaining time for the *current step* or total needed for multi-step? 
-        // Existing logic sums up steps, let's keep it consistent.
-        const calculationTarget = currentHex.maxLevel + 1;
-        for (let l = currentHex.currentLevel + 1; l <= calculationTarget; l++) {
-            totalNeeded += getSecondsToGrow(l);
-        }
-        mode = 'UPGRADE';
-    }
-
-    const currentStepProgress = currentHex.progress;
-    // For single-step actions (Recovery), remaining is simple. For multi-step (Upgrade from decayed state), it's complex.
-    // Simplified visual: Just show progress of current hex.progress against needed for THIS step.
-    
-    // Recalculate 'needed' for just the current active step to make progress bar smooth
-    const currentStepNeeded = isRecovering 
-        ? getSecondsToGrow(currentHex.maxLevel) 
-        : getSecondsToGrow(currentHex.currentLevel + 1);
-
-    const percent = currentStepNeeded > 0 ? (currentStepProgress / currentStepNeeded) * 100 : 0;
-    const remaining = Math.max(0, currentStepNeeded - currentStepProgress);
-
-    return { totalNeeded, remaining, percent, mode };
-  }, [currentHex, isPlayerGrowing, canUpgrade, playerGrowthIntent]);
-
-  const handleGrowClick = () => {
-    centerOnPlayer(); 
-    if (isMoving) return;
-    if (!currentHex) return;
-    if (!canRecover) {
-        showToast("Supplies exhausted here", "error");
-        return;
-    }
-    togglePlayerGrowth('RECOVER');
-  };
-
-  const handleUpgradeClick = () => {
-    centerOnPlayer(); 
-    if (isMoving) return; 
-    if (!currentHex) return;
-    if (!canUpgrade) {
-        showToast(upgradeCondition.reason || "Conditions not met: Check Rank or Neighbors", "error");
-        return;
-    }
-    togglePlayerGrowth('UPGRADE');
-  };
-
-  const tooltipData = useMemo(() => {
-    if (!hoveredHexId) return null;
-    const hex = grid[hoveredHexId];
-    if (!hex) return null;
-
-    const obstacles = safeBots.map(b => ({ q: b.q, r: b.r }));
-    const isBlockedByBot = obstacles.some(o => o.q === hex.q && o.r === hex.r);
-    const isPlayerPos = hex.q === player.q && hex.r === player.r;
-    
-    let label: string | null = null;
-    let costMoves = 0;
-    let costCoins = 0;
-    let isReachable = false;
-    let moveCost = 0;
-    let canAffordCoins = true;
-    
-    if (isPlayerPos) {
-        label = "Current Location";
-        isReachable = true;
-    } else if (isBlockedByBot) {
-        label = "BLOCKED";
-    } else {
-        const path = findPath({ q: player.q, r: player.r }, { q: hex.q, r: hex.r }, grid, player.playerLevel, obstacles);
-        if (path) {
-            isReachable = true;
-            for (const step of path) {
-                const stepHex = grid[getHexKey(step.q, step.r)];
-                moveCost += (stepHex && stepHex.maxLevel >= 2) ? stepHex.maxLevel : 1;
-            }
-            const availableMoves = player.moves;
-            const movesToSpend = Math.min(moveCost, availableMoves);
-            const deficit = moveCost - movesToSpend;
-            const coinsToSpend = deficit * EXCHANGE_RATE_COINS_PER_MOVE;
-
-            costMoves = movesToSpend;
-            costCoins = coinsToSpend;
-            canAffordCoins = player.coins >= coinsToSpend;
-        } else {
-            label = "N/A";
-        }
-    }
-
-    const isLocked = hex.maxLevel > player.playerLevel;
-    let statusText = "OK";
-    let statusColor = "text-emerald-400";
-    let Icon = CheckCircle2;
-
-    if (isLocked) {
-        statusText = `REQ L${hex.maxLevel}`;
-        statusColor = "text-red-400";
-        Icon = Lock;
-    } else if (isBlockedByBot) {
-        statusText = "OCCUPIED";
-        statusColor = "text-amber-400";
-        Icon = AlertCircle;
-    } else if (isPlayerPos) {
-        statusText = "PLAYER";
-        statusColor = "text-blue-400";
-        Icon = MapPin;
-    }
-
-    return { 
-        hex, label, costMoves, costCoins, canAffordCoins, isReachable, isLocked, statusText, statusColor, Icon 
-    };
-  }, [hoveredHexId, grid, player.q, player.r, player.playerLevel, player.moves, player.coins, safeBots]);
-
-  const formatTime = (ms: number) => {
-    const totalSeconds = Math.ceil(ms / 1000);
-    const seconds = totalSeconds % 60;
-    const minutes = Math.floor(totalSeconds / 60);
-    if (minutes > 0) return `${minutes}m ${seconds}s`;
-    return `${seconds}s`;
-  };
-
-  const rotateCamera = (direction: 'left' | 'right') => {
+  const rotateCamera = useCallback((direction: 'left' | 'right') => {
       const step = 60;
       const currentSnapped = Math.round(targetRotationRef.current / step) * step;
       const nextTarget = direction === 'left' ? currentSnapped - step : currentSnapped + step;
@@ -316,7 +82,7 @@ const GameView: React.FC = () => {
           if (progress < 1) requestAnimationFrame(animate);
       };
       requestAnimationFrame(animate);
-  };
+  }, [cameraRotation]);
 
   const centerOnPlayer = useCallback(() => {
     const { x: px, y: py } = hexToPixel(player.q, player.r, cameraRotation);
@@ -392,15 +158,19 @@ const GameView: React.FC = () => {
      }
   };
 
+  const neighbors = useMemo(() => getNeighbors(player.q, player.r), [player.q, player.r]);
   const playerNeighborKeys = useMemo(() => {
     return new Set(neighbors.map(n => getHexKey(n.q, n.r)));
   }, [neighbors]);
+
+  const safeBots = useMemo(() => (bots || []).filter(b => b && typeof b.q === 'number' && typeof b.r === 'number'), [bots]);
+  const isMoving = player.state === EntityState.MOVING;
 
   const renderList = useMemo(() => {
      const items: RenderItem[] = [];
      const allHexes = Object.values(grid) as Hex[];
 
-     // --- OPTIMIZATION: Viewport Culling ---
+     // Viewport Culling
      const inverseScale = 1 / viewState.scale;
      const visibleMinX = -viewState.x * inverseScale - VIEWPORT_PADDING;
      const visibleMaxX = (dimensions.width - viewState.x) * inverseScale + VIEWPORT_PADDING;
@@ -410,11 +180,7 @@ const GameView: React.FC = () => {
      for (const hex of allHexes) {
         if (!hex) continue;
         const { x, y } = hexToPixel(hex.q, hex.r, cameraRotation);
-        
-        if (x < visibleMinX || x > visibleMaxX || y < visibleMinY || y > visibleMaxY) {
-            continue; 
-        }
-
+        if (x < visibleMinX || x > visibleMaxX || y < visibleMinY || y > visibleMaxY) continue; 
         items.push({ type: 'HEX', id: hex.id, depth: y, q: hex.q, r: hex.r });
      }
 
@@ -423,13 +189,11 @@ const GameView: React.FC = () => {
 
      for (const u of allUnits) {
          if (!u || typeof u.q !== 'number' || typeof u.r !== 'number') continue;
-
          let track = movementTracker.current[u.id];
          if (!track) {
              track = { lastQ: u.q, lastR: u.r, fromQ: u.q, fromR: u.r, startTime: 0 };
              movementTracker.current[u.id] = track;
          }
-         
          if (track.lastQ !== u.q || track.lastR !== u.r) {
              track.fromQ = track.lastQ;
              track.fromR = track.lastR;
@@ -437,50 +201,33 @@ const GameView: React.FC = () => {
              track.lastQ = u.q;
              track.lastR = u.r;
          }
-
          const currentPixel = hexToPixel(u.q, u.r, cameraRotation);
-         
-         if (currentPixel.x < visibleMinX || currentPixel.x > visibleMaxX || currentPixel.y < visibleMinY || currentPixel.y > visibleMaxY) {
-             continue;
-         }
-
+         if (currentPixel.x < visibleMinX || currentPixel.x > visibleMaxX || currentPixel.y < visibleMinY || currentPixel.y > visibleMaxY) continue;
          let sortY = currentPixel.y;
-         
          if (now - track.startTime < 350) {
              const fromPixel = hexToPixel(track.fromQ, track.fromR, cameraRotation);
              sortY = Math.max(sortY, fromPixel.y);
          }
-
          items.push({ type: 'UNIT', id: u.id, depth: sortY + 25, q: u.q, r: u.r, isPlayer: u.isPlayer });
      }
 
-     // Visualizing Bot Paths (Debug/Observation)
      for (const b of safeBots) {
          if (b.movementQueue.length > 0) {
              const startHex = grid[getHexKey(b.q, b.r)];
              const startH = startHex ? 10 + (startHex.maxLevel * 6) : 10;
              const startPos = hexToPixel(b.q, b.r, cameraRotation);
-             
-             // Construct points array [x1, y1, x2, y2, ...]
-             const points = [startPos.x, startPos.y - startH - 10]; // Start at current bot pos
-
+             const points = [startPos.x, startPos.y - startH - 10]; 
              for (const step of b.movementQueue) {
-                 if (step.upgrade) continue; // Skip upgrade actions in visual path
+                 if (step.upgrade) continue; 
                  const hHex = grid[getHexKey(step.q, step.r)];
                  const h = hHex ? 10 + (hHex.maxLevel * 6) : 10;
                  const p = hexToPixel(step.q, step.r, cameraRotation);
                  points.push(p.x, p.y - h - 10);
              }
-
              if (points.length >= 4) {
                  items.push({
-                     type: 'CONN',
-                     id: `path-${b.id}`,
-                     depth: 999999, // Render on top
-                     points,
-                     color: b.avatarColor || '#ef4444',
-                     dash: [4, 4],
-                     opacity: 0.6
+                     type: 'CONN', id: `path-${b.id}`, depth: 999999, points,
+                     color: b.avatarColor || '#ef4444', dash: [4, 4], opacity: 0.6
                  });
              }
          }
@@ -500,10 +247,8 @@ const GameView: React.FC = () => {
             if (!isBot && isReachableHeight) {
                 const start = hexToPixel(player.q, player.r, cameraRotation);
                 const end = hexToPixel(neighbor.q, neighbor.r, cameraRotation);
-                
                 if ((start.x > visibleMinX && start.x < visibleMaxX && start.y > visibleMinY && start.y < visibleMaxY) ||
                     (end.x > visibleMinX && end.x < visibleMaxX && end.y > visibleMinY && end.y < visibleMaxY)) {
-                        
                     const startH = grid[getHexKey(player.q, player.r)] ? (10 + grid[getHexKey(player.q, player.r)].maxLevel * 6) : 10;
                     const endH = hex ? (10 + hex.maxLevel * 6) : 10;
                     const sY = start.y - startH;
@@ -511,7 +256,6 @@ const GameView: React.FC = () => {
                     let cost = 1;
                     if (hex && hex.maxLevel >= 2) cost = hex.maxLevel;
                     const canAfford = player.moves >= cost || player.coins >= (cost * EXCHANGE_RATE_COINS_PER_MOVE);
-                    
                     items.push({
                         type: 'CONN', id: `conn-${key}`, depth: Math.min(start.y, end.y),
                         points: [start.x, sY, end.x, eY], color: canAfford ? '#3b82f6' : '#ef4444',
@@ -523,10 +267,6 @@ const GameView: React.FC = () => {
      }
      return items.sort((a, b) => a.depth - b.depth);
   }, [grid, player, safeBots, cameraRotation, isMoving, playerNeighborKeys, viewState, dimensions]);
-
-  // Calculate Progress % for UI Bars
-  const levelProgress = winCondition ? Math.min(100, (player.playerLevel / winCondition.targetLevel) * 100) : 0;
-  const coinProgress = winCondition ? Math.min(100, (player.totalCoinsEarned / winCondition.targetCoins) * 100) : 0;
 
   // --- RENDER ---
   return (
@@ -576,416 +316,13 @@ const GameView: React.FC = () => {
         </Stage>
       </div>
 
-      {/* HEADER */}
-      <div className="absolute inset-x-0 top-0 p-2 md:p-4 z-30 pointer-events-none select-none">
-          {/* STATS */}
-          <div className="absolute top-2 md:top-4 left-2 md:left-1/2 md:-translate-x-1/2 flex flex-col items-center gap-2 max-w-[calc(100%-4rem)] md:max-w-fit pointer-events-auto z-40">
-               
-               <div className="flex items-stretch gap-2 md:gap-4 px-4 md:px-6 py-2 bg-slate-900/90 backdrop-blur-2xl rounded-[1.5rem] border border-slate-800 shadow-2xl overflow-hidden relative group">
-                   
-                   {/* RANK BLOCK (Clickable for Help) */}
-                   <button 
-                      onClick={() => { setHelpTopic('RANK'); playUiSound('CLICK'); }}
-                      className="flex flex-col items-center justify-center gap-1 min-w-[70px] hover:bg-slate-800/50 rounded-xl p-1 transition-colors relative cursor-help"
-                   >
-                       <div className="flex items-center gap-1.5 md:gap-2">
-                           <Crown className="w-4 h-4 md:w-5 md:h-5 text-indigo-500" />
-                           <div className="flex flex-col items-start leading-none">
-                               <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Rank</span>
-                               <div className="flex items-baseline gap-1">
-                                  <span className="text-lg md:text-2xl font-black text-white">{player.playerLevel}</span>
-                                  {winCondition && <span className="text-[10px] md:text-xs text-slate-500 font-mono">/ {winCondition.targetLevel}</span>}
-                               </div>
-                           </div>
-                       </div>
-                       {/* Progress Bar */}
-                       <div className="w-full h-1 bg-slate-800 rounded-full mt-1 overflow-hidden">
-                           <div className="h-full bg-indigo-500" style={{ width: `${levelProgress}%` }}></div>
-                       </div>
-                   </button>
+      {/* INDEPENDENT HUD LAYER */}
+      <GameHUD 
+        hoveredHexId={hoveredHexId} 
+        onRotateCamera={rotateCamera} 
+        onCenterPlayer={centerOnPlayer} 
+      />
 
-                   <div className="w-px bg-slate-800 my-1"></div>
-
-                   {/* UPGRADE QUEUE BLOCK */}
-                   <button 
-                      onClick={() => { setHelpTopic('QUEUE'); playUiSound('CLICK'); }}
-                      className="flex flex-col items-center justify-center gap-1 min-w-[60px] hover:bg-slate-800/50 rounded-xl p-1 transition-colors cursor-help"
-                   >
-                       <span className="text-[10px] font-bold text-slate-500 tracking-widest uppercase">Cycle</span>
-                       <div className="flex items-center gap-1.5 md:gap-2">
-                           <TrendingUp className="w-4 h-4 md:w-5 md:h-5 text-emerald-500" />
-                           <div className="flex gap-0.5 md:gap-1 h-4 md:h-5 items-center">
-                               {Array.from({length: queueSize}).map((_, i) => (
-                                  <div key={i} className={`w-1.5 md:w-2 h-3 md:h-4 rounded-sm transition-all duration-300 ${player.recentUpgrades.length > i ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)] scale-110' : 'bg-slate-800'}`} />
-                               ))}
-                           </div>
-                       </div>
-                   </button>
-
-                   <div className="w-px bg-slate-800 my-1"></div>
-
-                   {/* COINS BLOCK */}
-                   <button 
-                      onClick={() => { setHelpTopic('COINS'); playUiSound('CLICK'); }}
-                      className="flex flex-col items-center justify-center gap-1 min-w-[80px] hover:bg-slate-800/50 rounded-xl p-1 transition-colors cursor-help"
-                   >
-                       <div className="flex items-center gap-1.5 md:gap-2">
-                           <Coins className="w-4 h-4 md:w-5 md:h-5 text-amber-500" />
-                           <div className="flex flex-col items-start leading-none">
-                               <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Credits</span>
-                               <div className="flex items-baseline gap-1">
-                                  <span className="text-lg md:text-2xl font-black text-white">{player.coins}</span>
-                                  {winCondition && <span className="text-[10px] md:text-xs text-slate-500 font-mono">/ {winCondition.targetCoins}</span>}
-                               </div>
-                           </div>
-                       </div>
-                        {/* Progress Bar */}
-                       <div className="w-full h-1 bg-slate-800 rounded-full mt-1 overflow-hidden">
-                           <div className="h-full bg-amber-500" style={{ width: `${coinProgress}%` }}></div>
-                       </div>
-                   </button>
-
-                   <div className="w-px bg-slate-800 my-1"></div>
-
-                   {/* MOVES BLOCK */}
-                   <button 
-                      onClick={() => { setHelpTopic('MOVES'); playUiSound('CLICK'); }}
-                      className="flex flex-col items-center justify-center gap-1 min-w-[60px] hover:bg-slate-800/50 rounded-xl p-1 transition-colors cursor-help"
-                   >
-                       <span className="text-[10px] font-bold text-slate-500 tracking-widest uppercase">Moves</span>
-                       <div className="flex items-center gap-1.5 md:gap-2">
-                           <Footprints className={`w-4 h-4 md:w-5 md:h-5 ${isMoving ? 'text-slate-400 animate-pulse' : 'text-blue-500'}`} />
-                           <span className="text-lg md:text-2xl font-black text-white leading-none">{player.moves}</span>
-                       </div>
-                   </button>
-                   
-                    {/* Help Indicator */}
-                   <div className="absolute top-1 right-2 opacity-0 group-hover:opacity-50 transition-opacity">
-                      <HelpCircle className="w-3 h-3 text-slate-500" />
-                   </div>
-               </div>
-          </div>
-
-          {/* RIGHT: Rankings + Exit */}
-          <div className="absolute top-2 md:top-4 right-2 md:right-4 flex items-start gap-2 pointer-events-auto z-50">
-               {/* Sound Toggle */}
-               <button 
-                  onClick={() => { toggleMute(); playUiSound('CLICK'); }}
-                  className="w-11 h-11 flex items-center justify-center bg-slate-900/90 backdrop-blur-2xl border border-slate-700/80 rounded-2xl text-slate-400 hover:text-white hover:bg-slate-800 transition-all shadow-xl active:scale-95"
-               >
-                  {isMuted ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
-               </button>
-
-               <div className={`flex flex-col bg-slate-900/90 backdrop-blur-2xl border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden transition-all duration-300 ease-in-out origin-top-right ${isRankingsOpen ? 'w-56 md:w-64' : 'w-auto'}`}>
-                   <div onClick={() => { setIsRankingsOpen(!isRankingsOpen); playUiSound('CLICK'); }} className="flex items-center justify-between p-2 md:p-3 cursor-pointer hover:bg-white/5 transition-colors gap-2 md:gap-4 h-11">
-                       <div className="flex items-center gap-2 md:gap-2.5">
-                           <Trophy className="w-4 h-4 text-amber-500" />
-                           {isRankingsOpen && <span className="text-[9px] md:text-[10px] font-bold text-slate-300 uppercase tracking-wider whitespace-nowrap">Live Rankings</span>}
-                       </div>
-                       {isRankingsOpen ? <ChevronUp className="w-3 h-3 text-slate-500" /> : <ChevronDown className="w-3 h-3 text-slate-500" />}
-                   </div>
-                   
-                   {isRankingsOpen && (
-                       <div className="flex flex-col p-2 pt-0 gap-1.5 max-h-[40vh] overflow-y-auto no-scrollbar">
-                           {[player, ...safeBots].sort((a, b) => (b.totalCoinsEarned || 0) - (a.totalCoinsEarned || 0)).map((e) => {
-                               const isPlayer = e.type === 'PLAYER';
-                               const color = isPlayer ? (user?.avatarColor || '#3b82f6') : (e.avatarColor || '#ef4444');
-                               return (
-                                   <div key={e.id} className="flex items-center justify-between p-2 rounded-xl bg-slate-950/50 border border-slate-800/50">
-                                       <div className="flex items-center gap-3 overflow-hidden">
-                                           <div className="w-2 h-2 rounded-full shrink-0 shadow-[0_0_8px_currentColor]" style={{ color, backgroundColor: color }} />
-                                           <div className="flex flex-col min-w-0">
-                                               <span className={`text-[10px] md:text-[11px] font-bold truncate leading-tight ${isPlayer ? 'text-white' : 'text-slate-400'}`}>{isPlayer ? (user?.nickname || 'YOU') : e.id.toUpperCase()}</span>
-                                               <div className="flex gap-0.5 mt-0.5">
-                                                   {Array.from({length: queueSize}).map((_, i) => (
-                                                       <div key={i} className={`w-1 h-1 rounded-full ${e.recentUpgrades.length > i ? 'bg-emerald-500' : 'bg-slate-800'}`} />
-                                                   ))}
-                                               </div>
-                                           </div>
-                                       </div>
-                                       <div className="flex flex-col items-end leading-none">
-                                           <span className="text-[10px] md:text-[11px] font-mono text-amber-500 font-bold">{e.coins}</span>
-                                           <span className="text-[8px] md:text-[9px] font-mono text-indigo-400">L{e.playerLevel}</span>
-                                       </div>
-                                   </div>
-                               );
-                           })}
-                       </div>
-                   )}
-               </div>
-
-               <button onClick={() => { setShowExitConfirmation(true); playUiSound('CLICK'); }} className="w-11 h-11 flex items-center justify-center bg-slate-900/90 backdrop-blur-2xl border border-slate-700/80 rounded-2xl text-slate-400 hover:text-white hover:bg-slate-800 transition-all shadow-xl active:scale-95" title="Exit Session">
-                  <LogOut className="w-5 h-5" />
-               </button>
-          </div>
-      </div>
-
-      {/* --- RIGHT PANEL: DEBUG CONSOLE --- */}
-      <div className="hidden md:flex absolute top-24 right-4 z-20 pointer-events-auto flex-col w-[350px] bg-slate-950/90 backdrop-blur-lg border border-slate-700/50 rounded-2xl shadow-2xl overflow-hidden max-h-[calc(100vh-10rem)]">
-          <div className="flex items-center justify-between p-3 bg-slate-900 border-b border-slate-700">
-             <div className="flex items-center gap-2 text-slate-300 font-bold text-xs uppercase tracking-wider">
-                <Terminal className="w-4 h-4 text-indigo-400" />
-                <span>Debug Console</span>
-             </div>
-             <div className="flex gap-2">
-                <div className="w-2.5 h-2.5 rounded-full bg-red-500/20 border border-red-500/50"></div>
-                <div className="w-2.5 h-2.5 rounded-full bg-amber-500/20 border border-amber-500/50"></div>
-                <div className="w-2.5 h-2.5 rounded-full bg-emerald-500/20 border border-emerald-500/50"></div>
-             </div>
-          </div>
-
-          <div ref={consoleRef} className="flex-1 overflow-y-auto overflow-x-hidden p-0 font-mono text-[10px] bg-[#0c0e15] text-slate-300">
-             {unifiedLogs.length === 0 && (
-                <div className="p-4 text-slate-600 italic text-center">System Idle. Waiting for events...</div>
-             )}
-             {unifiedLogs.map((log, i) => {
-                 let logStyle = "border-l-2 border-slate-700 bg-slate-900/20";
-                 let textStyle = "text-slate-300";
-                 
-                 if (log.type === 'ERROR') {
-                     logStyle = "border-l-2 border-red-500 bg-red-950/20";
-                     textStyle = "text-red-400 font-bold";
-                 } else if (log.type === 'WARN') {
-                     logStyle = "border-l-2 border-amber-500 bg-amber-950/20";
-                     textStyle = "text-amber-400";
-                 } else if (log.type === 'SUCCESS') {
-                     logStyle = "border-l-2 border-emerald-500 bg-emerald-950/20";
-                     textStyle = "text-emerald-400";
-                 } else if (log.type === 'DEBUG') {
-                     logStyle = "border-l-2 border-indigo-500/30 bg-indigo-950/10";
-                     textStyle = "text-slate-400 italic";
-                 }
-
-                 return (
-                    <div key={log.id} className={`flex gap-2 p-2 border-b border-slate-800/50 ${logStyle}`}>
-                        <div className="shrink-0 w-16 text-slate-600 text-[9px] select-none">
-                            {new Date(log.timestamp).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute:'2-digit', second:'2-digit' })}
-                        </div>
-                        <div className="flex-1 break-words">
-                            <div className="flex items-center gap-2 mb-0.5">
-                                {(log as any).isBot ? (
-                                    <span className="px-1 py-0.5 rounded bg-slate-800 text-xs font-bold uppercase tracking-wider" style={{ color: (log as any).botColor }}>
-                                        {log.source}
-                                    </span>
-                                ) : (
-                                    <span className={`uppercase font-bold tracking-wider text-[9px] ${log.source === 'SYSTEM' ? 'text-cyan-500' : 'text-blue-400'}`}>
-                                        {log.source}
-                                    </span>
-                                )}
-                            </div>
-                            <span className={`${textStyle} leading-relaxed block`}>{log.text}</span>
-                        </div>
-                    </div>
-                 );
-             })}
-          </div>
-      </div>
-
-      {/* TOOLTIP & ACTION BARS */}
-      <div className="absolute bottom-32 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-3 w-[90%] md:w-[28rem] pointer-events-none">
-        {tooltipData && (
-          <div className="bg-slate-900/95 backdrop-blur-xl border border-slate-700/80 px-5 py-2.5 rounded-full shadow-2xl animate-in slide-in-from-bottom-2 fade-in duration-200 pointer-events-auto flex items-center gap-4">
-             <span className="text-white font-black text-sm uppercase tracking-tight whitespace-nowrap">HEX LEVEL {tooltipData.hex.maxLevel}</span>
-             <div className="w-px h-4 bg-slate-700"></div>
-             {tooltipData.isReachable && !tooltipData.isLocked ? (
-                <>
-                  {tooltipData.label ? (
-                     <span className="text-slate-300 font-mono text-xs font-bold uppercase tracking-wide whitespace-nowrap">{tooltipData.label}</span>
-                  ) : (
-                     <div className="flex items-center gap-3 font-mono text-xs font-bold">
-                        {tooltipData.costMoves > 0 && (<div className="flex items-center gap-1.5"><span className="text-white">{tooltipData.costMoves}</span><Footprints className="w-3.5 h-3.5 text-blue-500" /></div>)}
-                        {tooltipData.costMoves > 0 && tooltipData.costCoins > 0 && (<span className="text-slate-600">+</span>)}
-                        {tooltipData.costCoins > 0 && (<div className="flex items-center gap-1.5"><span className={tooltipData.canAffordCoins ? "text-white" : "text-red-500 font-black animate-pulse"}>{tooltipData.costCoins}</span><Coins className={`w-3.5 h-3.5 ${tooltipData.canAffordCoins ? "text-amber-500" : "text-red-500"}`} /></div>)}
-                     </div>
-                  )}
-                </>
-             ) : (
-                <div className={`flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider ${tooltipData.statusColor}`}><tooltipData.Icon className="w-3.5 h-3.5" /><span>{tooltipData.statusText}</span></div>
-             )}
-          </div>
-        )}
-        {currentHex && !growthCondition.canGrow && !isPlayerGrowing && !isMoving && !canRecover && !canUpgrade && (
-          <div className="flex gap-2 px-3 py-1.5 bg-red-950/90 backdrop-blur-md rounded-lg border border-red-500/50 shadow-lg animate-pulse pointer-events-auto">
-            <AlertCircle className="w-3 h-3 text-red-500 mt-0.5 shrink-0" /><span className="text-[9px] text-red-100 uppercase font-bold tracking-tight">{growthCondition.reason}</span>
-          </div>
-        )}
-      </div>
-
-      <div className="absolute bottom-8 w-full flex justify-center items-end gap-4 pointer-events-none z-40">
-        <button onClick={() => { rotateCamera('left'); playUiSound('CLICK'); }} className="w-12 h-12 mb-4 bg-slate-900/80 backdrop-blur rounded-full border border-slate-700 text-slate-400 hover:text-white hover:bg-slate-800 transition-all pointer-events-auto shadow-xl active:scale-95 flex items-center justify-center"><RotateCcw className="w-5 h-5" /></button>
-        <div className="flex gap-3 items-end pointer-events-auto h-20 transition-all duration-300">
-           {isPlayerGrowing ? (
-              <button onClick={() => { centerOnPlayer(); togglePlayerGrowth(timeData.mode === 'RECOVERY' ? 'RECOVER' : 'UPGRADE'); }} className={`w-44 h-20 bg-slate-900/90 backdrop-blur-xl rounded-2xl relative overflow-hidden flex flex-col items-center justify-center shadow-[0_0_30px_rgba(0,0,0,0.2)] active:scale-95 transition-all group ${timeData.mode === 'RECOVERY' ? 'border border-blue-500/50' : 'border border-emerald-500/50'}`}>
-                  {timeData.mode === 'RECOVERY' ? (
-                     <>
-                        <div className="absolute inset-0 bg-gradient-to-r from-blue-600/10 via-blue-400/30 to-blue-600/10" style={{ width: `${timeData.percent}%`, transition: 'width 1s linear', backgroundSize: '200% 100%', animation: 'shimmer-gradient 3s linear infinite' }} />
-                        <div className="absolute bottom-0 left-0 h-0.5 bg-blue-400 shadow-[0_0_10px_#60a5fa]" style={{ width: `${timeData.percent}%`, transition: 'width 1s linear' }} />
-                        <div className="relative z-10 flex flex-col items-center gap-1">
-                            <div className="flex items-center gap-2 text-blue-100 font-black text-xs uppercase tracking-widest"><Pause className="w-3 h-3 fill-current" /><span>RECOVERING</span></div>
-                            <span className="text-[10px] font-mono text-blue-400 font-bold">{formatTime(timeData.remaining * 1000)}</span>
-                        </div>
-                     </>
-                  ) : (
-                     <>
-                        <div className="absolute inset-0 bg-gradient-to-r from-emerald-600/10 via-emerald-400/30 to-emerald-600/10" style={{ width: `${timeData.percent}%`, transition: 'width 1s linear', backgroundSize: '200% 100%', animation: 'shimmer-gradient 3s linear infinite' }} />
-                        <div className="absolute bottom-0 left-0 h-0.5 bg-emerald-400 shadow-[0_0_10px_#34d399]" style={{ width: `${timeData.percent}%`, transition: 'width 1s linear' }} />
-                        <div className="relative z-10 flex flex-col items-center gap-1">
-                            <div className="flex items-center gap-2 text-emerald-100 font-black text-xs uppercase tracking-widest"><Pause className="w-3 h-3 fill-current" /><span>UPGRADING</span></div>
-                            <span className="text-[10px] font-mono text-emerald-400 font-bold">{formatTime(timeData.remaining * 1000)}</span>
-                        </div>
-                     </>
-                  )}
-              </button>
-           ) : (
-              <>
-                <button onClick={handleGrowClick} className={`w-20 h-20 rounded-2xl flex flex-col items-center justify-center gap-2 border-2 transition-all active:scale-90 shadow-xl ${(canRecover && !isMoving) ? 'bg-blue-600/10 border-blue-500/50 hover:bg-blue-600/20 text-blue-100 shadow-[0_0_20px_rgba(37,99,235,0.2)]' : 'bg-slate-900/80 border-slate-800 text-slate-600 grayscale opacity-60 cursor-pointer hover:bg-slate-800'}`}>
-                    <Zap className="w-6 h-6 fill-current" /><span className="text-[9px] font-black uppercase tracking-widest">Recovery</span>
-                </button>
-                <button onClick={handleUpgradeClick} className={`w-20 h-20 rounded-2xl flex flex-col items-center justify-center gap-2 border-2 transition-all active:scale-90 shadow-xl ${(canUpgrade && !isMoving) ? 'bg-amber-600/10 border-amber-500/50 hover:bg-amber-600/20 text-amber-100 shadow-[0_0_20px_rgba(245,158,11,0.2)]' : 'bg-slate-900/80 border-slate-800 text-slate-600 grayscale opacity-60 cursor-pointer hover:bg-slate-800'}`}>
-                    <ChevronsUp className="w-6 h-6" /><span className="text-[9px] font-black uppercase tracking-widest">Upgrade</span>
-                </button>
-              </>
-           )}
-        </div>
-        <button onClick={() => { rotateCamera('right'); playUiSound('CLICK'); }} className="w-12 h-12 mb-4 bg-slate-900/80 backdrop-blur rounded-full border border-slate-700 text-slate-400 hover:text-white hover:bg-slate-800 transition-all pointer-events-auto shadow-xl active:scale-95 flex items-center justify-center"><RotateCw className="w-5 h-5" /></button>
-      </div>
-      
-       {/* MOVE COST CONFIRMATION MODAL */}
-      {pendingConfirmation && (
-        <div className="absolute inset-0 z-[60] bg-black/70 backdrop-blur-sm flex items-center justify-center pointer-events-auto p-4">
-          <div className="bg-slate-900 border border-slate-700 p-6 rounded-3xl shadow-2xl max-w-sm w-full text-center">
-             <div className="mx-auto w-12 h-12 bg-amber-500/10 rounded-full flex items-center justify-center mb-4"><Coins className="w-6 h-6 text-amber-500" /></div>
-             <h3 className="text-xl font-bold text-white mb-2">Resource Conversion</h3>
-             <p className="text-slate-400 text-xs mb-6 px-4">High-level sectors require additional propulsion. <br/><span className="text-amber-500">Insufficient moves available.</span></p>
-             <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 mb-6 flex flex-col gap-2">
-                <div className="flex justify-between items-center"><span className="text-xs font-bold text-slate-500 uppercase">Total Move Cost</span><span className="text-white font-mono font-bold">{pendingConfirmation.data.costMoves + (pendingConfirmation.data.costCoins / EXCHANGE_RATE_COINS_PER_MOVE)}</span></div>
-                <div className="w-full h-px bg-slate-800 my-1"></div>
-                <div className="flex justify-between items-center"><span className="text-xs font-bold text-slate-500 uppercase">Available Moves</span><span className="text-emerald-500 font-mono font-bold">{player.moves}</span></div>
-                <div className="flex justify-between items-center"><span className="text-xs font-bold text-amber-500 uppercase">Credit Cost</span><div className="text-amber-500 font-mono font-bold flex items-center gap-1">-{pendingConfirmation.data.costCoins} <Coins className="w-3 h-3" /></div></div>
-             </div>
-             <div className="flex gap-3">
-               <button onClick={cancelPendingAction} className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 rounded-xl text-slate-300 font-bold text-xs uppercase tracking-wider">Abort</button>
-               <button onClick={confirmPendingAction} className="flex-1 py-3 bg-amber-600 hover:bg-amber-500 rounded-xl text-white font-bold text-xs uppercase tracking-wider shadow-lg shadow-amber-500/20">Authorize</button>
-             </div>
-          </div>
-        </div>
-      )}
-
-       {/* HELP MODAL */}
-      {helpTopic && (
-        <div className="absolute inset-0 z-[70] bg-black/70 backdrop-blur-sm flex items-center justify-center pointer-events-auto p-4" onClick={() => setHelpTopic(null)}>
-            <div className="bg-slate-900 border border-slate-700 p-6 rounded-3xl shadow-2xl max-w-sm w-full relative overflow-hidden" onClick={e => e.stopPropagation()}>
-                <button onClick={() => setHelpTopic(null)} className="absolute top-4 right-4 text-slate-500 hover:text-white"><XCircle className="w-5 h-5"/></button>
-                <div className="flex flex-col items-center text-center">
-                    <div className="w-12 h-12 rounded-full bg-slate-800 flex items-center justify-center mb-4">
-                        {helpTopic === 'RANK' && <Crown className="w-6 h-6 text-indigo-500" />}
-                        {helpTopic === 'QUEUE' && <TrendingUp className="w-6 h-6 text-emerald-500" />}
-                        {helpTopic === 'COINS' && <Coins className="w-6 h-6 text-amber-500" />}
-                        {helpTopic === 'MOVES' && <Footprints className="w-6 h-6 text-blue-500" />}
-                    </div>
-                    
-                    <h3 className="text-xl font-black text-white mb-2 uppercase tracking-wide">
-                        {helpTopic === 'RANK' && 'Clearance Rank'}
-                        {helpTopic === 'QUEUE' && 'Upgrade Cycle'}
-                        {helpTopic === 'COINS' && 'Credits'}
-                        {helpTopic === 'MOVES' && 'Propulsion'}
-                    </h3>
-
-                    <div className="text-sm text-slate-400 leading-relaxed px-2">
-                        {helpTopic === 'RANK' && (
-                            <>
-                                <p className="mb-2">Your Rank determines your maximum clearance level. You cannot enter or upgrade sectors higher than your Rank.</p>
-                                <p className="text-indigo-400 font-bold">Goal: Reach Rank {winCondition?.targetLevel} to complete the mission.</p>
-                            </>
-                        )}
-                        {helpTopic === 'QUEUE' && (
-                            <>
-                                <p className="mb-2">To prevent instability, you cannot upgrade the same sector repeatedly. You must rotate between {queueSize} different sectors.</p>
-                                <p className="text-emerald-400 font-bold">Green dots show your current momentum.</p>
-                            </>
-                        )}
-                        {helpTopic === 'COINS' && (
-                            <>
-                                <p className="mb-2">Credits are required to fund sector upgrades. In emergencies, they can be converted into fuel for movement.</p>
-                                <p className="text-amber-500 font-bold">Goal: Amass {winCondition?.targetCoins} Credits.</p>
-                                <p className="text-xs mt-2 opacity-70">Exchange Rate: {EXCHANGE_RATE_COINS_PER_MOVE} Credits = 1 Move</p>
-                            </>
-                        )}
-                        {helpTopic === 'MOVES' && (
-                            <>
-                                <p className="mb-2">Movement requires energy. Moves are replenished by completing upgrades or recovering resources from owned sectors.</p>
-                                <p className="text-blue-400 font-bold">Tip: High level sectors cost more moves to traverse.</p>
-                            </>
-                        )}
-                    </div>
-                </div>
-            </div>
-        </div>
-      )}
-
-      {showExitConfirmation && (
-        <div className="absolute inset-0 z-[70] bg-black/80 backdrop-blur-sm flex items-center justify-center pointer-events-auto p-4">
-          <div className="bg-slate-900 border border-slate-700 p-6 rounded-3xl shadow-2xl max-w-sm w-full text-center relative overflow-hidden">
-             <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-red-500 to-transparent opacity-50"></div>
-             <div className="mx-auto w-12 h-12 bg-red-500/10 rounded-full flex items-center justify-center mb-4 border border-red-500/20"><LogOut className="w-6 h-6 text-red-500" /></div>
-             <h3 className="text-xl font-bold text-white mb-2">Abort Mission?</h3>
-             <p className="text-slate-400 text-xs mb-6 leading-relaxed">Terminating the session will disconnect from the current sector. <br/><span className="text-red-400 font-bold">All unsaved tactical data will be lost.</span></p>
-             <div className="flex gap-3">
-               <button onClick={() => { setShowExitConfirmation(false); playUiSound('CLICK'); }} className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 rounded-xl text-slate-300 font-bold text-xs uppercase tracking-wider transition-colors">Cancel</button>
-               <button onClick={() => { abandonSession(); setShowExitConfirmation(false); playUiSound('CLICK'); }} className="flex-1 py-3 bg-red-900/50 hover:bg-red-800/50 border border-red-800/50 rounded-xl text-red-200 hover:text-white font-bold text-xs uppercase tracking-wider shadow-lg shadow-red-900/20 transition-all">Confirm Exit</button>
-             </div>
-          </div>
-        </div>
-      )}
-
-      {toast && (
-        <div className="absolute bottom-24 md:bottom-auto md:top-24 left-1/2 -translate-x-1/2 z-[60] w-[90%] max-w-md pointer-events-none">
-          <div className="mx-auto bg-red-950/95 border border-red-500/50 text-red-100 px-4 py-3 rounded-2xl shadow-[0_0_30px_rgba(239,68,68,0.6)] backdrop-blur-xl flex flex-col md:flex-row items-center justify-center gap-2 md:gap-3 animate-in fade-in slide-in-from-bottom-4 md:slide-in-from-top-4 duration-300">
-             <AlertTriangle className="w-5 h-5 text-red-500 shrink-0" /><span className="text-xs md:text-sm font-bold uppercase tracking-wider text-center leading-tight break-words">{toast.message}</span>
-          </div>
-        </div>
-      )}
-
-      { (gameStatus === 'VICTORY' || gameStatus === 'DEFEAT') && (
-        <div className="absolute inset-0 z-[80] bg-black/80 backdrop-blur-lg flex items-center justify-center pointer-events-auto p-4 animate-in fade-in duration-500">
-            <div className="bg-slate-900 border border-slate-700 p-8 rounded-3xl shadow-2xl max-w-lg w-full text-center relative overflow-hidden">
-                <div className={`absolute top-0 left-0 w-full h-1 bg-gradient-to-r ${gameStatus === 'VICTORY' ? 'from-transparent via-amber-500 to-transparent' : 'from-transparent via-red-500 to-transparent'}`}></div>
-                <div className={`mx-auto w-16 h-16 rounded-full flex items-center justify-center mb-4 border-2 ${gameStatus === 'VICTORY' ? 'bg-amber-500/10 border-amber-500/30' : 'bg-red-500/10 border-red-500/30'}`}>
-                    {gameStatus === 'VICTORY' ? <Trophy className="w-8 h-8 text-amber-500" /> : <Shield className="w-8 h-8 text-red-500" />}
-                </div>
-                <h2 className={`text-4xl font-black mb-2 uppercase tracking-wider ${gameStatus === 'VICTORY' ? 'text-amber-400' : 'text-red-500'}`}>
-                    {gameStatus}
-                </h2>
-                <p className="text-slate-400 text-sm mb-8">{winCondition?.label} Objective {gameStatus === 'VICTORY' ? 'Achieved' : 'Failed'}.</p>
-
-                <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 mb-8 flex justify-around text-left">
-                    <div className="flex flex-col">
-                        <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Session Time</span>
-                        <span className="text-white font-mono font-bold text-lg">{formatTime(Date.now() - sessionStartTime)}</span>
-                    </div>
-                    <div className="w-px bg-slate-800"></div>
-                    <div className="flex flex-col">
-                        <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Total Credits</span>
-                        <span className="text-amber-400 font-mono font-bold text-lg">{player.totalCoinsEarned}</span>
-                    </div>
-                    <div className="w-px bg-slate-800"></div>
-                    <div className="flex flex-col">
-                        <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Final Rank</span>
-                        <span className="text-indigo-400 font-mono font-bold text-lg">L{player.playerLevel}</span>
-                    </div>
-                </div>
-
-                <div className="flex gap-4">
-                    <button onClick={() => { abandonSession(); playUiSound('CLICK'); }} className="flex-1 py-4 bg-slate-800 hover:bg-slate-700 rounded-xl text-slate-300 font-bold text-xs uppercase tracking-wider transition-colors">
-                        Main Menu
-                    </button>
-                    <button onClick={() => { abandonSession(); setUIState('LEADERBOARD'); playUiSound('CLICK'); }} className="flex-1 py-4 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-white font-bold text-xs uppercase tracking-wider shadow-lg shadow-indigo-500/20 transition-colors">
-                        View Leaderboard
-                    </button>
-                </div>
-            </div>
-        </div>
-      )}
     </div>
   );
 };

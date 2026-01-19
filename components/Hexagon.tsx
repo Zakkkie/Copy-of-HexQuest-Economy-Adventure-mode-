@@ -1,5 +1,4 @@
 
-
 import React, { useEffect, useRef, useMemo } from 'react';
 import { Group, Path, Shape } from 'react-konva';
 import Konva from 'konva';
@@ -37,6 +36,7 @@ const LOCK_PATH = "M12 1a5 5 0 0 0-5 5v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2
 
 const HexagonVisual: React.FC<HexagonVisualProps> = React.memo(({ hex, rotation, isPlayerNeighbor, playerRank, isOccupied, onHexClick, onHover }) => {
   const groupRef = useRef<Konva.Group>(null);
+  const progressShapeRef = useRef<Konva.Shape>(null);
   
   const { x, y } = hexToPixel(hex.q, hex.r, rotation);
   const levelIndex = Math.min(hex.maxLevel, 11);
@@ -104,8 +104,6 @@ const HexagonVisual: React.FC<HexagonVisualProps> = React.memo(({ hex, rotation,
 
 
   const handleClick = (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => {
-    // Only allow Left Click (button 0). Button 2 is Right Click (Rotate).
-    // Touch events don't have 'button' property and are treated as primary interactions.
     if ('button' in e.evt) {
         if (e.evt.button !== 0) return; 
     }
@@ -125,13 +123,29 @@ const HexagonVisual: React.FC<HexagonVisualProps> = React.memo(({ hex, rotation,
        anim.start();
        return () => { 
            anim.stop(); 
-           // Ensure we snap back to scale 1 immediately when growth stops to prevent "hanging" scale
            node.scale({x: 1, y: 1}); 
        };
     } else {
         node.scale({x: 1, y: 1});
     }
   }, [isGrowing]);
+
+  // SMOOTH PROGRESS ANIMATION
+  useEffect(() => {
+      const shape = progressShapeRef.current;
+      if (shape && isGrowing) {
+          // Animate the 'visualProgress' attribute from current to new target
+          // We use 0.95s to be just under the 1s tick rate
+          const tween = new Konva.Tween({
+              node: shape,
+              duration: 0.95, 
+              visualProgress: progressPercent,
+              easing: Konva.Easings.Linear
+          });
+          tween.play();
+          return () => tween.destroy();
+      }
+  }, [progressPercent, isGrowing]);
 
   return (
     <Group 
@@ -189,7 +203,12 @@ const HexagonVisual: React.FC<HexagonVisualProps> = React.memo(({ hex, rotation,
       {isGrowing && (
         <Group x={0} y={offsetY - 15} listening={false}>
           <Shape
+            ref={progressShapeRef}
+            // Initialize custom attribute
+            visualProgress={progressPercent}
             sceneFunc={(ctx, shape) => {
+                const p = shape.getAttr('visualProgress') || 0;
+                
                 ctx.beginPath();
                 ctx.moveTo(-15, 0);
                 ctx.lineTo(15, 0);
@@ -200,7 +219,8 @@ const HexagonVisual: React.FC<HexagonVisualProps> = React.memo(({ hex, rotation,
                 
                 ctx.beginPath();
                 ctx.moveTo(-15, 0);
-                ctx.lineTo(-15 + (30 * progressPercent), 0);
+                // Use interpolated value 'p' instead of jumpy 'progressPercent'
+                ctx.lineTo(-15 + (30 * p), 0);
                 ctx.strokeStyle = isLocked ? "#f59e0b" : "#10b981";
                 ctx.lineWidth = 4;
                 ctx.lineCap = "round";

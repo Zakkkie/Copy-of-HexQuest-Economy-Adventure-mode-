@@ -1,3 +1,4 @@
+
 import { GameState, GameAction, GameEvent, ValidationResult, SessionState, EntityState } from '../types';
 import { WorldIndex } from './WorldIndex';
 import { System } from './systems/System';
@@ -49,16 +50,18 @@ export class GameEngine {
   /**
    * Optimized State Cloning
    * Replaces JSON.parse(JSON.stringify) with structural shallow copying.
-   * This reduces GC pressure and CPU time by O(N) where N is state size.
+   * PERFORMANCE FIX: We copy `grid` by REFERENCE. 
+   * Systems MUST adhere to Copy-On-Write pattern when modifying grid cells.
+   * i.e. state.grid = { ...state.grid, [key]: newHex }
    */
   private cloneState(source: SessionState): SessionState {
     return {
       ...source,
-      // 1. Shallow copy the Grid container. 
-      // Individual Hex objects must be treated as immutable by systems (use spread to update).
-      grid: { ...source.grid }, 
+      // 1. Copy Grid by Reference (Instant).
+      // If a system needs to change a hex, it must clone the grid container first (COW).
+      grid: source.grid, 
       
-      // 2. Clone Entities (Player & Bots)
+      // 2. Clone Entities (Player & Bots) - Always fresh objects to track mutations like position/coins
       player: {
         ...source.player,
         movementQueue: [...source.player.movementQueue],

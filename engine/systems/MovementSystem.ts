@@ -1,5 +1,6 @@
+
 import { System } from './System';
-import { GameState, GameEvent, EntityState, Entity, SessionState } from '../../types';
+import { GameState, GameEvent, EntityState, Entity, SessionState, Hex } from '../../types';
 import { WorldIndex } from '../WorldIndex';
 import { getHexKey, getNeighbors } from '../../services/hexUtils';
 import { GameEventFactory } from '../events';
@@ -74,21 +75,31 @@ export class MovementSystem implements System {
     // Update World Index immediately so subsequent entities see the new position
     index.updateEntityPosition(entity.id, oldQ, oldR, entity.q, entity.r);
 
-    // Fog of War / Exploration
+    // Fog of War / Exploration (Copy-On-Write Optimization)
     const neighbors = getNeighbors(entity.q, entity.r);
+    const updates: Record<string, Hex> = {};
+    
     [...neighbors, { q: entity.q, r: entity.r }].forEach(n => {
       const k = getHexKey(n.q, n.r);
-      if (!state.grid[k]) {
-        state.grid[k] = { 
+      const hex = state.grid[k];
+      
+      if (!hex) {
+        // Create new hex
+        updates[k] = { 
           id: k, q: n.q, r: n.r, 
           currentLevel: 0, maxLevel: 0, progress: 0, 
           revealed: true 
         };
-      } else {
-        // IMMUTABLE UPDATE: Create new hex object instead of mutating existing one
-        state.grid[k] = { ...state.grid[k], revealed: true };
+      } else if (!hex.revealed) {
+        // Update existing hex only if not revealed
+        updates[k] = { ...hex, revealed: true };
       }
     });
+
+    // BATCH UPDATE: Only clone the grid if there are actual updates
+    if (Object.keys(updates).length > 0) {
+        state.grid = { ...state.grid, ...updates };
+    }
 
     // 4. Update State Immediately
     // If queue is empty (or next is upgrade), transition to IDLE now so UI unlocks.

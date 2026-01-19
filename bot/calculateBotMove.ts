@@ -11,12 +11,19 @@ export interface AiResult {
     memory: BotMemory;
 }
 
+// PERFORMANCE CONFIGURATION
+// Radius 25 = ~2000 hexes. Radius 12 = ~470 hexes.
+// Reducing this drastically lowers CPU usage per bot tick.
+const SCAN_RADIUS = 12; 
+const CONTEXT_RADIUS = 15;
+
 /**
  * AI V12: "The Survivor"
  * 
  * Improvements:
  * - Anti-Stuck Mechanism: Detects repeated failures/waits and forces a random move (or suicide attack) to break loops.
  * - Self-Aware Idleness: Increments stuckCounter internally when deciding to WAIT due to lack of options.
+ * - Optimized Scanning: Reduced search radius for better mobile performance.
  */
 export const calculateBotMove = (
   bot: Entity, 
@@ -117,7 +124,7 @@ export const calculateBotMove = (
        }
 
        // 2. Find nearest farmable hex
-       const candidates = index.getHexesInRange({q:bot.q, r:bot.r}, 15)
+       const candidates = index.getHexesInRange({q:bot.q, r:bot.r}, CONTEXT_RADIUS)
           .filter(h => h.ownerId === bot.id && (h.id !== currentHexKey || !bot.recoveredCurrentHex))
           .filter(h => !reservedHexKeys?.has(h.id));
        
@@ -212,7 +219,7 @@ export const calculateBotMove = (
 
       // 3. Sub-Goal Resolution
       if (strategy === 'GRIND_RANK') {
-          const grindCandidates = index.getHexesInRange({q:bot.q, r:bot.r}, 15)
+          const grindCandidates = index.getHexesInRange({q:bot.q, r:bot.r}, CONTEXT_RADIUS)
               .filter(h => h.ownerId === bot.id && h.id !== candidateMasterHex.id && h.maxLevel <= bot.playerLevel)
               .sort((a,b) => b.maxLevel - a.maxLevel);
           if (grindCandidates.length > 0) targetHex = grindCandidates[0];
@@ -220,7 +227,7 @@ export const calculateBotMove = (
       }
 
       if (strategy === 'FARM_CYCLE' || strategy === 'EXPAND_DEFAULT') {
-           const empties = index.getHexesInRange({q:bot.q, r:bot.r}, 15)
+           const empties = index.getHexesInRange({q:bot.q, r:bot.r}, CONTEXT_RADIUS)
               .filter(h => !h.ownerId && h.maxLevel === 0 && !reservedHexKeys?.has(h.id));
            
            empties.sort((a,b) => {
@@ -341,13 +348,13 @@ export const calculateBotMove = (
   }
 
   // 2. Context Analysis for Scoring
-  const ownedHexes = index.getHexesInRange({q:bot.q, r:bot.r}, 100).filter(h => h.ownerId === bot.id);
+  const ownedHexes = index.getHexesInRange({q:bot.q, r:bot.r}, CONTEXT_RADIUS).filter(h => h.ownerId === bot.id);
   const isEarlyGame = ownedHexes.length < 5;
   const distToPlayer = cubeDistance(bot, player);
   const isThreatened = distToPlayer < 8;
 
   // 3. Generate New Candidates
-  const candidates = index.getHexesInRange({q:bot.q, r:bot.r}, 25);
+  const candidates = index.getHexesInRange({q:bot.q, r:bot.r}, SCAN_RADIUS);
   const potentialGoals: { hex: Hex, score: number }[] = [];
 
   for (const h of candidates) {

@@ -1,3 +1,4 @@
+
 import { System } from './System';
 import { GameState, GameEvent, EntityState, Entity, EntityType, SessionState } from '../../types';
 import { WorldIndex } from '../WorldIndex';
@@ -141,8 +142,8 @@ export class GrowthSystem implements System {
             
             events.push(GameEventFactory.create('RECOVERY_USED', msg, entity.id));
             
-            // Reset Progress and Stop
-            state.grid[key] = { ...hex, progress: 0 };
+            // Reset Progress and Stop (Copy-On-Write)
+            state.grid = { ...state.grid, [key]: { ...hex, progress: 0 } };
             
             // For Player, toggle off. For Bot, they will rethink next tick.
             if (entity.type === EntityType.PLAYER) {
@@ -152,8 +153,8 @@ export class GrowthSystem implements System {
             entity.state = EntityState.IDLE;
             return false;
         } else {
-            // Tick Progress
-            state.grid[key] = { ...hex, progress: hex.progress + 1 };
+            // Tick Progress (Copy-On-Write)
+            state.grid = { ...state.grid, [key]: { ...hex, progress: hex.progress + 1 } };
             return true;
         }
     }
@@ -251,13 +252,16 @@ export class GrowthSystem implements System {
       entity.totalCoinsEarned += config.income;
       entity.moves += 1;
       
-      // Update Hex
-      state.grid[key] = { 
-          ...hex, 
-          currentLevel: targetLevel, 
-          maxLevel: newMaxLevel, 
-          progress: 0,
-          ownerId: newOwnerId
+      // Update Hex (Copy-On-Write)
+      state.grid = { 
+          ...state.grid, 
+          [key]: { 
+              ...hex, 
+              currentLevel: targetLevel, 
+              maxLevel: newMaxLevel, 
+              progress: 0,
+              ownerId: newOwnerId
+          }
       };
       
       let shouldContinue = targetLevel < newMaxLevel;
@@ -279,8 +283,8 @@ export class GrowthSystem implements System {
       return true;
 
     } else {
-      // Tick Progress
-      state.grid[key] = { ...hex, progress: hex.progress + 1 };
+      // Tick Progress (Copy-On-Write)
+      state.grid = { ...state.grid, [key]: { ...hex, progress: hex.progress + 1 } };
       return true;
     }
   }

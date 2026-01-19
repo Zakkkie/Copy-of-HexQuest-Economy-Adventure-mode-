@@ -1,13 +1,4 @@
 
-
-
-
-
-
-
-
-
-
 import { create } from 'zustand';
 import { GameState, Entity, Hex, EntityType, UIState, WinCondition, LeaderboardEntry, EntityState, MoveAction, RechargeAction, SessionState, LogEntry } from './types.ts';
 import { GAME_CONFIG } from './rules/config.ts';
@@ -308,35 +299,33 @@ export const useGameStore = create<GameStore>((set, get) => ({
       if (!engine || engine.state.gameStatus !== 'PLAYING') return;
       
       const result = engine.processTick();
-      let newToast = get().toast;
-      let leaderboardUpdated = false;
-      const currentLeaderboard = [...get().leaderboard];
       
-      // PROCESS EVENTS
-      if (result.events.length > 0) {
-          
-          // Audio Feedback for events
+      // OPTIMIZATION (Updated): Update every tick (1s) for smooth visual progress.
+      // 1Hz updates are cheap enough for React, and required for smooth progress bar transitions.
+      const hasEvents = result.events.length > 0;
+      const shouldUpdateUI = true; 
+      
+      // Always play audio immediately regardless of React Render
+      if (hasEvents) {
           result.events.forEach(event => {
             if (event.entityId === result.state.player.id) {
                switch (event.type) {
-                 case 'LEVEL_UP':
-                   audioService.play('LEVEL_UP');
-                   break;
-                 case 'SECTOR_ACQUIRED':
-                   audioService.play('SUCCESS');
-                   break;
-                 case 'RECOVERY_USED':
-                   audioService.play('COIN');
-                   break;
-                 case 'ACTION_DENIED':
-                 case 'ERROR':
-                   audioService.play('ERROR');
-                   break;
+                 case 'LEVEL_UP': audioService.play('LEVEL_UP'); break;
+                 case 'SECTOR_ACQUIRED': audioService.play('SUCCESS'); break;
+                 case 'RECOVERY_USED': audioService.play('COIN'); break;
+                 case 'ACTION_DENIED': 
+                 case 'ERROR': audioService.play('ERROR'); break;
                }
             }
             if (event.type === 'VICTORY') audioService.play('SUCCESS');
             if (event.type === 'DEFEAT') audioService.play('ERROR');
           });
+      }
+
+      if (hasEvents || shouldUpdateUI) {
+          let newToast = get().toast;
+          let leaderboardUpdated = false;
+          const currentLeaderboard = [...get().leaderboard];
 
           // 1. Error Handling & Toasts
           const error = result.events.find(e => e.type === 'ACTION_DENIED' || e.type === 'ERROR');
@@ -344,7 +333,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
               if (error.entityId === engine.state.player.id) {
                  newToast = { message: error.message || 'Error', type: 'error', timestamp: Date.now() };
               }
-
               const alreadyLogged = result.state.messageLog.some(l => l.timestamp === error.timestamp && l.text === error.message);
               if (!alreadyLogged && error.message) {
                   result.state.messageLog.unshift({
@@ -406,12 +394,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
                   localStorage.setItem(LEADERBOARD_STORAGE_KEY, JSON.stringify(currentLeaderboard));
               }
           }
-      }
 
-      set(state => ({ 
-          session: result.state,
-          toast: newToast,
-          leaderboard: leaderboardUpdated ? currentLeaderboard : state.leaderboard,
-      }));
+          set(state => ({ 
+              session: result.state,
+              toast: newToast,
+              leaderboard: leaderboardUpdated ? currentLeaderboard : state.leaderboard,
+          }));
+      }
   }
 }));
