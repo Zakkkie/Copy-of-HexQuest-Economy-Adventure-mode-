@@ -1,3 +1,4 @@
+
 import React, { useEffect, useRef, useMemo } from 'react';
 import { Group, Path, Shape } from 'react-konva';
 import Konva from 'konva';
@@ -73,7 +74,8 @@ const HexagonVisual: React.FC<HexagonVisualProps> = React.memo(({ hex, rotation,
     const selectionTops = [];
     
     // Inset the selection ring so it sits INSIDE the hex face
-    const SELECTION_INSET = 5; 
+    // "Slight offset" -> Reduced from 5 to 3 for a closer fit to border
+    const SELECTION_INSET = 3; 
     const selRadius = Math.max(0, HEX_SIZE - SELECTION_INSET);
 
     // Generate vertices
@@ -154,16 +156,17 @@ const HexagonVisual: React.FC<HexagonVisualProps> = React.memo(({ hex, rotation,
   useEffect(() => {
       const selectionNode = selectionRef.current;
       if (selectionNode && isSelected) {
-          selectionNode.strokeWidth(2);
+          // Initial State
+          selectionNode.strokeWidth(1.5);
           selectionNode.shadowBlur(5);
-          selectionNode.opacity(0.8);
+          selectionNode.opacity(0.6);
 
           const tween = new Konva.Tween({
               node: selectionNode,
-              duration: 1.2,
+              duration: 1.0, // Faster pulse for shimmering effect
               shadowBlur: 15, // Intensify glow
-              opacity: 1,     // Brighten
-              strokeWidth: 3, // Slight thicken pulse
+              opacity: 1,     // Brighten significantly
+              strokeWidth: 2, // Slight thicken pulse, but keep it thin
               yoyo: true,
               repeat: -1,     // Loop forever
               easing: Konva.Easings.EaseInOut,
@@ -218,7 +221,7 @@ const HexagonVisual: React.FC<HexagonVisualProps> = React.memo(({ hex, rotation,
             ref={selectionRef}
             data={selectionPathData}
             stroke="#22d3ee" // Cyan-400 (Bright Neon)
-            strokeWidth={2} // Thin solid line
+            strokeWidth={1.5} // Continuous thin line
             fillEnabled={false}
             perfectDrawEnabled={false}
             shadowColor="#22d3ee" // Matching glow

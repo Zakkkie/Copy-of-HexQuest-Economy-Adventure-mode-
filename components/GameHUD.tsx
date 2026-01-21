@@ -352,7 +352,7 @@ const GameHUD: React.FC<GameHUDProps> = ({ hoveredHexId, onRotateCamera, onCente
               <HexButton 
                 onClick={() => { onCenterPlayer(); togglePlayerGrowth(timeData.mode === 'RECOVERY' ? 'RECOVER' : 'UPGRADE'); }}
                 active={true}
-                variant={timeData.mode === 'RECOVERY' ? 'blue' : 'emerald'}
+                variant={timeData.mode === 'RECOVERY' ? 'blue' : 'amber'}
                 progress={timeData.percent}
                 size="lg"
                 pulsate={true}
@@ -378,11 +378,11 @@ const GameHUD: React.FC<GameHUDProps> = ({ hoveredHexId, onRotateCamera, onCente
                 <HexButton 
                   onClick={handleUpgradeClick} 
                   disabled={!canUpgrade || isMoving}
-                  variant={(canUpgrade && !isMoving) ? 'emerald' : 'slate'}
+                  variant={(canUpgrade && !isMoving) ? 'amber' : 'slate'}
                   size="lg" // CHANGED: Equal size to recover
                   pulsate={canUpgrade && !isMoving} 
                 >
-                    <ChevronsUp className={`w-10 h-10 ${(canUpgrade && !isMoving) ? 'text-emerald-50 drop-shadow-[0_0_8px_rgba(52,211,153,0.8)]' : 'text-slate-500'}`} />
+                    <ChevronsUp className={`w-10 h-10 ${(canUpgrade && !isMoving) ? 'text-amber-50 drop-shadow-[0_0_8px_rgba(251,191,36,0.8)]' : 'text-slate-500'}`} />
                 </HexButton>
               </>
            )}
