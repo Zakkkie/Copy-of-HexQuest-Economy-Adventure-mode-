@@ -1,4 +1,6 @@
 
+
+
 /**
  * Procedural Audio Synthesizer for HexQuest
  * Uses Web Audio API to generate sci-fi UI sounds without external assets.
@@ -13,6 +15,8 @@ type SoundType =
   | 'LEVEL_UP' 
   | 'COIN' 
   | 'GROWTH_START'
+  | 'COLLAPSE'
+  | 'CRACK'
   | 'WARNING';
 
 class AudioService {
@@ -209,6 +213,61 @@ class AudioService {
         lfo.start(t);
         osc.stop(t + 0.5);
         lfo.stop(t + 0.5);
+        break;
+      }
+      
+      case 'CRACK': {
+        // Sharp, high pitch noise burst (Ice cracking)
+        const noiseBuffer = this.ctx.createBuffer(1, this.ctx.sampleRate * 0.1, this.ctx.sampleRate);
+        const output = noiseBuffer.getChannelData(0);
+        for (let i = 0; i < output.length; i++) {
+            output[i] = Math.random() * 2 - 1;
+        }
+        
+        const noise = this.ctx.createBufferSource();
+        noise.buffer = noiseBuffer;
+        
+        const filter = this.ctx.createBiquadFilter();
+        filter.type = 'highpass';
+        filter.frequency.setValueAtTime(2000, t);
+        
+        const gain = this.ctx.createGain();
+        gain.gain.setValueAtTime(0.2, t);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+        
+        noise.connect(filter);
+        filter.connect(gain);
+        gain.connect(this.masterGain);
+        
+        noise.start(t);
+        break;
+      }
+
+      case 'COLLAPSE': {
+        // Breaking glass / rubble sound (Deeper)
+        const noiseBuffer = this.ctx.createBuffer(1, this.ctx.sampleRate * 0.5, this.ctx.sampleRate);
+        const output = noiseBuffer.getChannelData(0);
+        for (let i = 0; i < this.ctx.sampleRate * 0.5; i++) {
+            output[i] = Math.random() * 2 - 1;
+        }
+        
+        const noise = this.ctx.createBufferSource();
+        noise.buffer = noiseBuffer;
+        
+        const filter = this.ctx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.setValueAtTime(1000, t);
+        filter.frequency.linearRampToValueAtTime(100, t + 0.4);
+        
+        const gain = this.ctx.createGain();
+        gain.gain.setValueAtTime(0.3, t);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
+        
+        noise.connect(filter);
+        filter.connect(gain);
+        gain.connect(this.masterGain);
+        
+        noise.start(t);
         break;
       }
     }

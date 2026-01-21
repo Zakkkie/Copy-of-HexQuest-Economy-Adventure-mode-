@@ -1,4 +1,6 @@
 
+
+
 import { Hex, HexCoord } from '../types';
 import { GAME_CONFIG, getLevelConfig, SAFETY_CONFIG } from '../rules/config';
 
@@ -146,6 +148,10 @@ export const findPath = (
   // 1. Immediate checks
   if (startKey === endKey) return [];
   
+  // DESTINATION VALIDITY CHECK
+  const endHex = grid[endKey];
+  if (endHex && endHex.structureType === 'VOID') return null; // Cannot move into a hole
+
   // Quick pre-check distance to avoid searching impossible paths
   if (cubeDistance(start, end) > SAFETY_CONFIG.MAX_PATH_LENGTH) return null;
 
@@ -203,6 +209,9 @@ export const findPath = (
       const neighborHex = grid[nKey];
       
       // -- Game Rules --
+      // 0. Void Check: Cannot enter a destroyed hex
+      if (neighborHex && neighborHex.structureType === 'VOID') continue;
+
       // 1. Rank Check: Cannot enter hex higher than player rank
       if (neighborHex && neighborHex.maxLevel > rank) continue; 
       

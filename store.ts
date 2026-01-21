@@ -1,4 +1,8 @@
 
+
+
+
+
 import { create } from 'zustand';
 import { GameState, Entity, Hex, EntityType, UIState, WinCondition, LeaderboardEntry, EntityState, MoveAction, RechargeAction, SessionState, LogEntry, FloatingText } from './types.ts';
 import { GAME_CONFIG } from './rules/config.ts';
@@ -299,8 +303,26 @@ export const useGameStore = create<GameStore>((set, get) => ({
   tick: () => {
       if (!engine || engine.state.gameStatus !== 'PLAYING') return;
       
+      // Store durability of player hex BEFORE tick
+      const playerHexKey = getHexKey(engine.state.player.q, engine.state.player.r);
+      const playerHexBefore = engine.state.grid[playerHexKey];
+      const durabilityBefore = playerHexBefore?.durability;
+
       const result = engine.processTick();
       
+      // Check if durability decreased on player hex
+      const playerHexAfter = result.state.grid[playerHexKey];
+      if (playerHexBefore && playerHexAfter && playerHexAfter.maxLevel === 1) {
+         if ((durabilityBefore || 3) > (playerHexAfter.durability || 3)) {
+            // Durability dropped
+            if ((playerHexAfter.durability || 0) <= 0) {
+               audioService.play('WARNING'); // Critical crack
+            } else {
+               audioService.play('CRACK'); // Normal crack
+            }
+         }
+      }
+
       // Cleanup old visual effects (1.2s lifetime)
       const now = Date.now();
       if (result.state.effects) {
@@ -323,6 +345,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
                  case 'LEVEL_UP': audioService.play('LEVEL_UP'); break;
                  case 'SECTOR_ACQUIRED': audioService.play('SUCCESS'); break;
                  case 'RECOVERY_USED': audioService.play('COIN'); break;
+                 case 'HEX_COLLAPSE': audioService.play('COLLAPSE'); break;
                  case 'ACTION_DENIED': 
                  case 'ERROR': audioService.play('ERROR'); break;
                }
@@ -331,14 +354,16 @@ export const useGameStore = create<GameStore>((set, get) => ({
             if (event.type === 'DEFEAT') audioService.play('ERROR');
 
             // Visual Effects (Floating Text)
-            // Only show effects for Player or near Player? 
-            // For now, show all but style Player's differently or prominently.
             if (event.entityId) {
                 const entity = result.state.player.id === event.entityId 
                     ? result.state.player 
                     : result.state.bots.find(b => b.id === event.entityId);
+                
+                // For hex collapse, we want the effect on the hex coordinate, not necessarily the entity (though they are same usually)
+                const targetQ = event.data?.q !== undefined ? Number(event.data.q) : (entity?.q || 0);
+                const targetR = event.data?.r !== undefined ? Number(event.data.r) : (entity?.r || 0);
 
-                if (entity) {
+                if (entity || event.type === 'HEX_COLLAPSE') {
                     let text = '';
                     let color = '#ffffff';
                     let icon: FloatingText['icon'] = undefined;
@@ -361,6 +386,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
                                 icon = 'COIN';
                             }
                             break;
+                        case 'HEX_COLLAPSE':
+                            text = "COLLAPSE";
+                            color = "#ef4444"; // Red
+                            icon = 'DOWN';
+                            break;
                         case 'ACTION_DENIED':
                         case 'ERROR':
                             if (isPlayer) {
@@ -374,8 +404,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
                     if (text) {
                         result.state.effects.push({
                             id: `fx-${Date.now()}-${Math.random()}`,
-                            q: entity.q,
-                            r: entity.r,
+                            q: targetQ,
+                            r: targetR,
                             text,
                             color,
                             icon,

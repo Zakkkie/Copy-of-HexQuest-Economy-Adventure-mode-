@@ -1,4 +1,6 @@
 
+
+
 import { System } from './System';
 import { GameState, GameEvent, EntityState, Entity, EntityType, SessionState } from '../../types';
 import { WorldIndex } from '../WorldIndex';
@@ -199,6 +201,8 @@ export class GrowthSystem implements System {
       let newMaxLevel = hex.maxLevel;
       let didMaxIncrease = false;
       let newOwnerId = hex.ownerId; 
+      let newDurability = hex.durability;
+
       const prefix = entity.type === EntityType.PLAYER ? "[YOU]" : `[${entity.id}]`;
 
       if (targetLevel > hex.maxLevel) {
@@ -212,6 +216,7 @@ export class GrowthSystem implements System {
         if (targetLevel === 1) {
              // ACQUISITION
              newOwnerId = entity.id;
+             newDurability = GAME_CONFIG.L1_HEX_MAX_DURABILITY; // Set durability to 3
              
              // Cycle Management
              const q = [...entity.recentUpgrades, hex.id];
@@ -230,6 +235,9 @@ export class GrowthSystem implements System {
              events.push(GameEventFactory.create('SECTOR_ACQUIRED', msg, entity.id));
         } else {
              // LEVEL UP
+             // When upgrading beyond L1 (to L2+), remove durability limitation
+             newDurability = undefined;
+
              const msg = `${prefix} Reached Rank L${targetLevel} (Cost: ${config.cost})`;
              
              state.messageLog.unshift({
@@ -260,7 +268,8 @@ export class GrowthSystem implements System {
               currentLevel: targetLevel, 
               maxLevel: newMaxLevel, 
               progress: 0,
-              ownerId: newOwnerId
+              ownerId: newOwnerId,
+              durability: newDurability
           }
       };
       

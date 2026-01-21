@@ -12,6 +12,9 @@
 
 
 
+
+
+
 export type HexCoord = { q: number; r: number; upgrade?: boolean; intent?: 'UPGRADE' | 'RECOVER' };
 
 // Read-only view of a Hex for the Bot (Architecture Requirement)
@@ -21,7 +24,7 @@ export interface HexView {
   r: number;
   currentLevel: number;
   maxLevel: number;
-  structureType?: 'NONE' | 'BARRIER' | 'MINE' | 'CAPITAL';
+  structureType?: 'NONE' | 'BARRIER' | 'MINE' | 'CAPITAL' | 'VOID'; // Added VOID
   ownerId?: string; 
 }
 
@@ -30,6 +33,7 @@ export interface Hex extends HexView {
   progress: number;
   revealed: boolean;
   structureHp?: number;
+  durability?: number; // New: Lives for Level 1 hexes
   mineTimer?: number;
   trap?: { active: boolean, potency?: number } | null;
   attackPoint?: number;
@@ -90,6 +94,9 @@ export interface Entity {
   
   // Track if "Recovery" ability was used on the current hex
   recoveredCurrentHex?: boolean; 
+  
+  // Timestamp of the last physical move to throttle logic to animation speed
+  lastMoveTime?: number; 
 }
 
 export type GameEventType = 
@@ -103,7 +110,8 @@ export type GameEventType =
   | 'ACTION_DENIED'
   | 'BOT_LOG'
   | 'LEADERBOARD_UPDATE'
-  | 'RECOVERY_USED'; // Added event type
+  | 'RECOVERY_USED'
+  | 'HEX_COLLAPSE'; // Added event type
 
 export interface GameEvent {
   type: GameEventType;
@@ -182,7 +190,7 @@ export interface FloatingText {
   color: string;
   startTime: number;
   lifetime: number;
-  icon?: 'UP' | 'PLUS' | 'WARN' | 'COIN';
+  icon?: 'UP' | 'PLUS' | 'WARN' | 'COIN' | 'DOWN';
 }
 
 // Authoritative state for a single game session, managed by GameEngine

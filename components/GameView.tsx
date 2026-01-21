@@ -1,6 +1,8 @@
 
+
+
 import React, { useEffect, useCallback, useState, useMemo, useRef, useLayoutEffect } from 'react';
-import { Stage, Layer, Line, Group, Text } from 'react-konva';
+import { Stage, Layer, Line, Group, Text, Circle } from 'react-konva';
 import Konva from 'konva';
 import { useGameStore } from '../store.ts';
 import { getHexKey, getNeighbors, hexToPixel } from '../services/hexUtils.ts';
@@ -8,7 +10,7 @@ import Hexagon from './Hexagon.tsx';
 import Unit from './Unit.tsx';
 import Background from './Background.tsx';
 import GameHUD from './GameHUD.tsx';
-import { EXCHANGE_RATE_COINS_PER_MOVE } from '../rules/config.ts';
+import { EXCHANGE_RATE_COINS_PER_MOVE, GAME_CONFIG } from '../rules/config.ts';
 import { Hex, EntityType, EntityState, FloatingText } from '../types.ts';
 
 const VIEWPORT_PADDING = 300; 
@@ -18,6 +20,67 @@ type RenderItem =
   | { type: 'HEX'; id: string; depth: number; q: number; r: number }
   | { type: 'UNIT'; id: string; depth: number; q: number; r: number; isPlayer: boolean }
   | { type: 'CONN'; id: string; depth: number; points: number[]; color: string; dash: number[]; opacity: number };
+
+// --- PARTICLES ---
+interface VisualParticle {
+    id: number;
+    x: number;
+    y: number;
+    color: string;
+}
+
+const DustCloud: React.FC<VisualParticle & { onComplete: (id: number) => void }> = React.memo(({ id, x, y, color, onComplete }) => {
+    const groupRef = useRef<Konva.Group>(null);
+
+    useEffect(() => {
+        const node = groupRef.current;
+        if (!node) return;
+
+        // Spawn 4 puffs
+        const puffs = node.find('Circle');
+        puffs.forEach((puff, i) => {
+             // Random Scatter
+             const angle = Math.random() * Math.PI * 2;
+             const dist = 10 + Math.random() * 10;
+             const tx = Math.cos(angle) * dist;
+             const ty = Math.sin(angle) * dist * 0.6; // Squash Y for isometric look
+
+             const tween = new Konva.Tween({
+                 node: puff,
+                 x: tx,
+                 y: ty,
+                 scaleX: 0,
+                 scaleY: 0,
+                 opacity: 0,
+                 duration: 0.4 + Math.random() * 0.2,
+                 easing: Konva.Easings.EaseOut,
+             });
+             tween.play();
+        });
+
+        // Cleanup timer
+        const t = setTimeout(() => {
+            onComplete(id);
+        }, 600);
+
+        return () => clearTimeout(t);
+    }, [id, onComplete]);
+
+    return (
+        <Group ref={groupRef} x={x} y={y}>
+            {[0, 1, 2, 3].map(i => (
+                <Circle 
+                    key={i}
+                    x={0} y={0}
+                    radius={3 + Math.random() * 3}
+                    fill={color}
+                    opacity={0.4}
+                />
+            ))}
+        </Group>
+    );
+});
+
 
 const FloatingEffect: React.FC<{ effect: FloatingText; rotation: number }> = React.memo(({ effect, rotation }) => {
     const groupRef = useRef<Konva.Group>(null);
@@ -94,6 +157,9 @@ const GameView: React.FC = () => {
   const isRotating = useRef(false);
   const lastMouseX = useRef(0);
   const movementTracker = useRef<Record<string, { lastQ: number; lastR: number; fromQ: number; fromR: number; startTime: number }>>({});
+  
+  // Local Particle State (Ephemeral)
+  const [particles, setParticles] = useState<VisualParticle[]>([]);
 
   // Interaction State
   const [hoveredHexId, setHoveredHexId] = useState<string | null>(null);
@@ -101,7 +167,7 @@ const GameView: React.FC = () => {
 
   // Game Loop
   useEffect(() => {
-    const interval = setInterval(tick, 1000);
+    const interval = setInterval(tick, 100); // 100ms tick for responsive updates
     return () => clearInterval(interval);
   }, [tick]);
 
@@ -116,6 +182,16 @@ const GameView: React.FC = () => {
     const handleResize = () => setDimensions({ width: window.innerWidth, height: window.innerHeight });
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const spawnDust = useCallback((x: number, y: number, color: string) => {
+      const id = Date.now() + Math.random();
+      // Use a light grey/white for generic dust, or color tinted
+      setParticles(prev => [...prev, { id, x, y, color: '#94a3b8' }]); 
+  }, []);
+
+  const removeParticle = useCallback((id: number) => {
+      setParticles(prev => prev.filter(p => p.id !== id));
   }, []);
 
   const rotateCamera = useCallback((direction: 'left' | 'right') => {
@@ -250,6 +326,7 @@ const GameView: React.FC = () => {
 
      const allUnits = [{ ...player, isPlayer: true }, ...safeBots.map(b => ({ ...b, isPlayer: false }))];
      const now = Date.now();
+     const zSortThreshold = GAME_CONFIG.MOVEMENT_LOGIC_INTERVAL_MS + 50; // Buffer slightly longer than movement
 
      for (const u of allUnits) {
          if (!u || typeof u.q !== 'number' || typeof u.r !== 'number') continue;
@@ -268,8 +345,11 @@ const GameView: React.FC = () => {
          const currentPixel = hexToPixel(u.q, u.r, cameraRotation);
          if (currentPixel.x < visibleMinX || currentPixel.x > visibleMaxX || currentPixel.y < visibleMinY || currentPixel.y > visibleMaxY) continue;
          let sortY = currentPixel.y;
-         if (now - track.startTime < 350) {
+         
+         // Smooth Z-Sorting during jump
+         if (now - track.startTime < zSortThreshold) {
              const fromPixel = hexToPixel(track.fromQ, track.fromR, cameraRotation);
+             // Sort by the 'lowest' (closest to screen bottom) point between start and end to avoid clipping
              sortY = Math.max(sortY, fromPixel.y);
          }
          items.push({ type: 'UNIT', id: u.id, depth: sortY + 25, q: u.q, r: u.r, isPlayer: u.isPlayer });
@@ -381,14 +461,30 @@ const GameView: React.FC = () => {
                     if (!unit) return null;
                     const hexKey = getHexKey(unit.q, unit.r);
                     const hLevel = grid[hexKey]?.maxLevel || 0;
-                    return <Unit key={item.id} q={unit.q} r={unit.r} type={item.isPlayer ? EntityType.PLAYER : EntityType.BOT} color={unit.avatarColor} rotation={cameraRotation} hexLevel={hLevel} totalCoinsEarned={unit.totalCoinsEarned} />;
+                    return (
+                        <Unit 
+                            key={item.id} 
+                            q={unit.q} 
+                            r={unit.r} 
+                            type={item.isPlayer ? EntityType.PLAYER : EntityType.BOT} 
+                            color={unit.avatarColor} 
+                            rotation={cameraRotation} 
+                            hexLevel={hLevel} 
+                            totalCoinsEarned={unit.totalCoinsEarned} 
+                            onMoveComplete={spawnDust}
+                        />
+                    );
                 } else if (item.type === 'CONN') {
                     return <Line key={item.id} points={item.points} stroke={item.color} strokeWidth={2} dash={item.dash} opacity={item.opacity} listening={false} perfectDrawEnabled={false} />;
                 }
                 return null;
             })}
             
-            {/* Visual Effects Layer (Always Top) */}
+            {/* Visual Effects Layer (Particles & Text) */}
+            {particles.map(p => (
+                <DustCloud key={p.id} {...p} onComplete={removeParticle} />
+            ))}
+
             {effects && effects.map((eff) => (
                 <FloatingEffect key={eff.id} effect={eff} rotation={cameraRotation} />
             ))}
